@@ -103,10 +103,15 @@ def calculate_sector_medians():
             sector_median = sector_medians.get(sector, 0.0)
             
             if pd.notna(sector_median) and sector_median > 0:
-                update_data = row.to_dict()
-                update_data['sector_median_pe'] = float(sector_median)
-                if db.save_fundamental_data(symbol, update_data):
-                    success_count += 1
+                # Nur sector_median_pe updaten, nicht alles (sonst NULL-Werte!)
+                cursor.execute("""
+                    UPDATE fundamental_data 
+                    SET sector_median_pe = ? 
+                    WHERE symbol = ?
+                """, (float(sector_median), symbol))
+                success_count += 1
+        
+        db.conn.commit()
         
         logger.info(f"✓ Branchen-Mediane für {success_count} Symbole aktualisiert")
         return True
