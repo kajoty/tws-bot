@@ -6,18 +6,28 @@ Algorithmic trading bot for Interactive Brokers TWS in Python. Trades stocks/opt
 
 **Architecture**: `IBTradingBot` inherits from IB's `EClient`/`EWrapper` for async API communication. Modular design with separate concerns for strategy, risk, database, and performance.
 
+**Key Components**:
+- `IBTradingBot` (EClient/EWrapper): TWS API orchestrator
+- `TradingStrategy`: Technical analysis & signal generation
+- `RiskManager`: Position sizing & limits enforcement
+- `DatabaseManager`: SQLite persistence (returns bool/data, no exceptions)
+- `PerformanceAnalyzer`: Metrics calculation & visualization
+
 ## Critical Concepts
 
-### IB API Threading
-- `EClient.run()` runs in separate thread (see `ib_trading_bot.py:connect_to_tws()`)
-- Callbacks (`nextValidId`, `historicalData`, `error`) execute in API thread
+### IB API Threading Model
+- `EClient.run()` runs in **daemon thread** started in `connect_to_tws()`
+- Callbacks (`nextValidId`, `historicalData`, `error`) execute in **API thread**
 - Use `self.pending_requests` dict to track async requests by ID
-- Wait for `self.connected = True` before making requests
+- Wait for `self.connected = True` before making requests (10s timeout)
+- Connection flow: `connect()` → `api_thread.start()` → wait for `nextValidId` callback
 
 ### Request ID Management
 - Historical/market data requests need unique IDs via `_get_next_request_id()`
 - Store metadata in `self.pending_requests[req_id]` for callback matching
+- Data accumulates in `request_info['data']` list during `historicalData()` callbacks
 - Mark `completed=True` when data arrives in `historicalDataEnd()`
+- Use `wait_for_request(req_id, timeout=30)` to block until completion
 
 ### Order Placement Flow
 1. Check `can_open_position()` for limits (max positions, existing position)
@@ -139,11 +149,35 @@ contract.exchange, contract.currency = "SMART", "USD"
 
 ## Key Files
 
-- **main.py**: Entry point, signal handling, trading loop
-- **config.py**: All tunable parameters
-- **ib_trading_bot.py**: Connection (70-110), historical (220-280), orders (340-380)
-- **strategy.py**: `check_strategy` signal logic (170-290)
-- **risk_management.py**: `calculate_position_size` (40-110)
+- **main.py**: Entry point, signal handling, trading loop, live trading confirmation
+- **config.py**: All tunable parameters (NEVER hardcode!)
+- **ib_trading_bot.py**: Connection (70-110), callbacks (110-170), historical (190-240), orders (240+)
+- **strategy.py**: Indicator calculations, `check_strategy` signal logic
+- **risk_management.py**: `calculate_position_size` (50-110), position tracking
+- **database.py**: SQLite tables, save/load methods (returns bool/data)
+- **performance.py**: Metrics (Sharpe, Sortino, max DD), 3-subplot charts
+
+## Project Structure
+```
+tws-bot/
+├── config.py                        # Single source of truth
+├── main.py                          # Entry point + signal handling
+├── ib_trading_bot.py                # EClient/EWrapper implementation
+├── strategy.py                      # Technical analysis (original)
+├── contrarian_options_strategy.py   # 52-Week extrema options strategy
+├── risk_management.py               # Position sizing
+├── database.py                      # SQLite persistence (fundamentals + IV)
+├── performance.py                   # Analytics & visualization
+├── trading_costs.py                 # Commission & fee calculator
+├── watchlist.csv                    # S&P 500 symbols with metadata
+├── watchlist_manager.py             # CSV watchlist handler
+├── watchlist_cli.py                 # CLI for watchlist management
+├── generate_sp500_watchlist.py      # Downloads S&P 500 data
+├── requirements.txt                 # Dependencies (ibapi, pandas, matplotlib, yfinance)
+├── data/                            # SQLite database
+├── logs/                            # Daily log files
+└── plots/                           # Performance charts
+```
 
 ## When Modifying
 
@@ -162,3 +196,38 @@ contract.exchange, contract.currency = "SMART", "USD"
 4. Hardcoding instead of using config
 5. Not checking `if df.empty` before operations
 6. Missing error handling in callbacks - many TWS errors aren't fatal
+
+## Development Workflow
+
+### Setup & Testing
+```powershell
+# Create virtual environment
+python -m venv venv
+venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure for testing
+# Edit config.py: IS_PAPER_TRADING=True, DRY_RUN=True
+python main.py
+```
+
+### Before Committing
+1. Test with `DRY_RUN=True` (no real orders)
+2. Test with Paper Trading (port 7497)
+3. Check logs in `logs/` for errors
+4. Validate with multiple symbols from `WATCHLIST_STOCKS`
+5. Update `.github/copilot-instructions.md` for architecture changes
+
+### No Test Suite
+- Project has no automated tests (`test*.py` files)
+- Manual testing via Paper Trading is the standard
+- Use TWS API demo account for validation
+
+### Logging Pattern
+```python
+logger.info("Success message")  # Normal operations
+logger.warning("Non-fatal issue") # Recoverable problems
+logger.error(f"Context: {e}")    # Failures with context
+```

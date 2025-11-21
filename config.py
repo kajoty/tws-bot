@@ -39,14 +39,52 @@ MAX_CONCURRENT_POSITIONS = 5
 MIN_POSITION_SIZE = 100.0
 
 # ============================================================================
+# STRATEGIE-AUSWAHL
+# ============================================================================
+
+# Welche Trading-Strategie verwenden?
+# 'STOCK' = Klassische Aktienstrategie (MA, RSI, MACD)
+# 'OPTIONS' = Konträre Optionsstrategie (52W-Extrema + Fundamentals)
+TRADING_STRATEGY = 'OPTIONS'  # Ändern zu 'STOCK' für Aktienhandel
+
+# ============================================================================
 # GEBÜHREN & KOSTEN
 # ============================================================================
 
-# Geschätzte Kommission pro Order (Buy/Sell = 2 Orders)
-COMMISSION_PER_ORDER = 1.0  # USD pro Order
+# AKTIEN-TRADING KOSTEN
+# Kommission pro Aktien-Order
+STOCK_COMMISSION_PER_ORDER = 5.00  # USD pro Order (Buy oder Sell)
+STOCK_MIN_COMMISSION = 1.00        # Minimum Kommission pro Order
+STOCK_MAX_COMMISSION = None        # Optional: Maximum Cap
+
+# OPTIONEN-TRADING KOSTEN
+# Kommission pro Options-Contract
+OPTION_COMMISSION_PER_CONTRACT = 2.50  # EUR 2,50 pro Contract
+OPTION_MIN_COMMISSION = 2.50           # Minimum Kommission pro Order
+OPTION_MAX_COMMISSION = None           # Optional: Maximum Cap
+
+# Beispiel Interactive Brokers Tiered Pricing:
+# - US Stocks: $0.005 per share, min $1.00, max 0.5% of trade value
+# - US Options: $0.65-0.70 per contract
+# - European Options: ~€2.00-2.50 per contract
+
+# WEITERE KOSTEN
+# Regulatory Fees (USA)
+SEC_FEE_PER_MILLION = 27.80  # USD pro Million USD Verkaufswert (nur Sells)
+FINRA_TAF_PER_SHARE = 0.000166  # USD pro Aktie (nur Sells, max $8.30)
+
+# Börsendatengebühren (monatlich)
+MONTHLY_MARKET_DATA_FEE = 10.00  # USD pro Monat
+
+# Währungsumrechnung
+EUR_TO_USD_RATE = 1.10  # Wechselkurs EUR/USD (aktualisieren!)
+CURRENCY_CONVERSION_SPREAD = 0.0002  # 0.02% Spread bei FX
 
 # Slippage-Schätzung (als Prozentsatz)
 SLIPPAGE_PCT = 0.001  # 0.1%
+
+# Legacy (für Rückwärtskompatibilität)
+COMMISSION_PER_ORDER = STOCK_COMMISSION_PER_ORDER
 
 # ============================================================================
 # DATENBANK
@@ -57,6 +95,10 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "data", "trading_data.db")
 
 # Erstelle data-Verzeichnis, falls nicht vorhanden
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+# Datenmanagement
+DATA_MAX_AGE_DAYS = 1       # Daten älter als X Tage werden als veraltet betrachtet
+DATA_RETENTION_DAYS = 730   # Alte Daten werden nach X Tagen gelöscht (2 Jahre)
 
 # ============================================================================
 # LOGGING
@@ -71,11 +113,26 @@ os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, f"trading_bot_{datetime.now().strftime('%Y%m%d')}.log")
 
 # ============================================================================
-# STRATEGIE-PARAMETER
+# STRATEGIE-AUSWAHL
 # ============================================================================
 
-# Symbole zum Handeln (Beispiele)
+# Welche Trading-Strategie verwenden?
+# 'STOCK' = Klassische Aktienstrategie (MA, RSI, MACD)
+# 'OPTIONS' = Konträre Optionsstrategie (52W-Extrema + Fundamentals)
+TRADING_STRATEGY = 'OPTIONS'  # Ändern zu 'STOCK' für Aktienhandel
+
+# Minimale Confidence für Optionssignale (0.0 - 1.0)
+MIN_CONFIDENCE_OPTIONS = 0.7  # 70% Mindest-Confidence für Options-Trades
+
+# ============================================================================
+# STRATEGIE-PARAMETER (STOCK)
+# ============================================================================
+
+# Symbole zum Handeln (Beispiele) - DEPRECATED: Nutze watchlist.csv stattdessen
 WATCHLIST_STOCKS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
+
+# Watchlist CSV Pfad
+WATCHLIST_CSV_PATH = "watchlist.csv"
 
 # Optionshandel aktivieren
 ENABLE_OPTIONS_TRADING = True
@@ -94,6 +151,46 @@ RSI_OVERBOUGHT = 70    # RSI Überkauft-Level
 # Volatilitäts-Filter
 MIN_IV_PERCENTILE = 30  # Minimum implizite Volatilität (Perzentil)
 MAX_IV_PERCENTILE = 70  # Maximum implizite Volatilität (Perzentil)
+
+# ============================================================================
+# KONTRÄRE OPTIONSSTRATEGIE (52-WOCHEN-EXTREMA)
+# ============================================================================
+
+# Handelsuniversum Filter
+MIN_MARKET_CAP = 5_000_000_000  # $5 Milliarden Minimum
+MIN_AVG_VOLUME = 500_000        # 500k durchschnittliches tägliches Volumen
+
+# 52-Wochen-Extrema Trigger
+TRIGGER_DISTANCE_52W_PERCENT = 0.02  # 2% Nähe zu 52W Hoch/Tief
+
+# Long Put Strategie (Short am 52W-Hoch)
+LONG_PUT_PE_OVERVALUATION = 1.5      # 150% über Branchen-Median P/E
+LONG_PUT_IV_RANK_MIN = 30            # IV Rank 30-80 Range (nicht Extreme)
+LONG_PUT_IV_RANK_MAX = 80            # IV Rank 30-80 Range (nicht Extreme)
+LONG_PUT_DTE_MIN = 60                # Minimum Days to Expiration
+LONG_PUT_DTE_MAX = 90                # Maximum Days to Expiration
+LONG_PUT_STOP_LOSS_PCT = 0.015       # 1.5% über 52W-Hoch
+LONG_PUT_TAKE_PROFIT_PCT = 0.50      # 50% Gewinn auf Prämie
+LONG_PUT_AUTO_CLOSE_DTE = 7          # Schließe ALLE bei DTE=7 (Theta-Schutz)
+
+# Long Call Strategie (Long am 52W-Tief)
+LONG_CALL_IV_RANK_MIN = 30           # IV Rank 30-80 Range (nicht Extreme)
+LONG_CALL_IV_RANK_MAX = 80           # IV Rank 30-80 Range (nicht Extreme)
+LONG_CALL_DTE_MIN = 90               # Minimum Days to Expiration
+LONG_CALL_DTE_MAX = 120              # Maximum Days to Expiration
+LONG_CALL_DELTA_TARGET = 0.40        # Delta für OTM Strike
+LONG_CALL_STOP_LOSS_PCT = 0.015      # 1.5% unter 52W-Tief
+LONG_CALL_TAKE_PROFIT_PCT = 0.75     # 75% Gewinn auf Prämie
+LONG_CALL_AUTO_CLOSE_DTE = 7         # Schließe ALLE bei DTE=7 (Theta-Schutz)
+
+# Position Sizing für Optionen
+MAX_OPTION_RISK_PER_TRADE_PCT = 0.01 # 1% des Kapitals pro Optionsposition (Prämie)
+
+# Handelszeiten (EST)
+TRADING_START_HOUR = 9               # 9:30 AM EST (als float: 9.5)
+TRADING_START_MINUTE = 30
+TRADING_END_HOUR = 16                # 4:00 PM EST
+TRADING_END_MINUTE = 0
 
 # ============================================================================
 # PERFORMANCE & REPORTING

@@ -99,14 +99,33 @@ def main():
         
         print("✓ Bot erfolgreich initialisiert\n")
         
-        print("Lade historische Daten für Watchlist...")
+        # Bereinige alte Daten (älter als CONFIG.DATA_RETENTION_DAYS)
+        print(f"Bereinige alte Daten (älter als {config.DATA_RETENTION_DAYS} Tage)...")
+        bot.db_manager.cleanup_old_data(days_to_keep=config.DATA_RETENTION_DAYS)
+        
+        print("\nLade/Aktualisiere historische Daten für Watchlist...")
+        loaded_from_db = 0
+        loaded_from_api = 0
+        
         for symbol in bot.watchlist:
             print(f"  - {symbol}...", end=" ", flush=True)
+            
+            # Prüfe ob Daten aktuell sind
+            if not bot.db_manager.needs_update(symbol, max_age_days=config.DATA_MAX_AGE_DAYS):
+                df = bot.db_manager.load_historical_data(symbol)
+                if not df.empty:
+                    bot.historical_data_cache[symbol] = df
+                    loaded_from_db += 1
+                    print("✓ (aus DB)")
+                    continue
+            
+            # Sonst: Von API laden
             req_id = bot.request_historical_data(symbol)
             bot.wait_for_request(req_id, timeout=30)
-            print("✓")
+            loaded_from_api += 1
+            print("✓ (API)")
         
-        print("\n✓ Alle Daten geladen\n")
+        print(f"\n✓ Daten geladen: {loaded_from_db} aus DB, {loaded_from_api} von API\n")
         
         bot.is_trading_active = True
         
