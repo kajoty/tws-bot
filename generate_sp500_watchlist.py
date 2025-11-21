@@ -45,6 +45,10 @@ def get_sp500_tickers():
             'industry': sp500_table.iloc[:, 3].astype(str) if len(sp500_table.columns) > 3 else 'Unknown'
         })
         
+        # Konvertiere Bindestriche zu Leerzeichen für IB API Kompatibilität
+        # BRK-B → BRK B, BF-B → BF B
+        df['symbol'] = df['symbol'].str.replace('-', ' ', regex=False)
+        
         # Entferne leere Zeilen
         df = df.dropna(subset=['symbol'])
         df = df[df['symbol'].str.strip() != '']

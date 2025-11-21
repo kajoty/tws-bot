@@ -163,20 +163,30 @@ tws-bot/
 ├── config.py                        # Single source of truth
 ├── main.py                          # Entry point + signal handling
 ├── ib_trading_bot.py                # EClient/EWrapper implementation
-├── strategy.py                      # Technical analysis (original)
+├── strategy.py                      # Technical analysis (MA/RSI/MACD)
 ├── contrarian_options_strategy.py   # 52-Week extrema options strategy
 ├── risk_management.py               # Position sizing
-├── database.py                      # SQLite persistence (fundamentals + IV)
+├── database.py                      # SQLite persistence (8 tables)
 ├── performance.py                   # Analytics & visualization
 ├── trading_costs.py                 # Commission & fee calculator
 ├── watchlist.csv                    # S&P 500 symbols with metadata
 ├── watchlist_manager.py             # CSV watchlist handler
 ├── watchlist_cli.py                 # CLI for watchlist management
 ├── generate_sp500_watchlist.py      # Downloads S&P 500 data
-├── requirements.txt                 # Dependencies (ibapi, pandas, matplotlib, yfinance)
+├── import_fundamentals_ib.py        # IB fundamentals importer
+├── import_fundamentals_simple.py    # Yahoo Finance alternative
+├── backtest_criteria.py             # Filter analysis tool
+├── show_trading_journal.py          # Trade log viewer
+├── web_interface.py                 # Flask monitoring dashboard
+├── service_wrapper.py               # Windows service wrapper
+├── service_wrapper_linux.py         # Linux systemd service
+├── install_service.ps1/sh           # Service installation scripts
+├── run_console.ps1/sh               # Console runner scripts
+├── requirements.txt                 # Dependencies (ibapi, pandas, matplotlib, yfinance, flask)
 ├── data/                            # SQLite database
 ├── logs/                            # Daily log files
-└── plots/                           # Performance charts
+├── plots/                           # Performance charts
+└── templates/                       # Flask HTML templates
 ```
 
 ## When Modifying
@@ -196,6 +206,122 @@ tws-bot/
 4. Hardcoding instead of using config
 5. Not checking `if df.empty` before operations
 6. Missing error handling in callbacks - many TWS errors aren't fatal
+
+## Multi-Strategy Architecture
+
+### Strategy Selection (`config.TRADING_STRATEGY`)
+- **'STOCK'**: Classic technical analysis (MA/RSI/MACD) in `strategy.py`
+- **'OPTIONS'**: Contrarian 52-week extrema strategy in `contrarian_options_strategy.py`
+  - Long Put @ 52W high (P/E overvaluation + IV Rank 30-80)
+  - Long Call @ 52W low (undervaluation + IV Rank 30-80)
+  - Auto-close at DTE=7 to avoid theta decay
+
+### Strategy Integration Points
+1. `ib_trading_bot.run_trading_cycle()` checks `config.TRADING_STRATEGY`
+2. Calls `strategy.check_strategy()` or `contrarian_strategy.check_options_opportunity()`
+3. Both return `(signal, confidence, details)` tuple
+4. `details` dict contains entry price, stop-loss, strategy-specific metadata
+
+## Data Pipeline & Database
+
+### 8 SQLite Tables (database.py)
+1. **historical_data**: OHLCV bars (UNIQUE: symbol, sec_type, date)
+2. **trades**: Executed orders with commission tracking
+3. **positions**: Current holdings (UNIQUE: symbol, sec_type)
+4. **performance**: Equity snapshots for charts
+5. **options_data**: Greeks & IV (UNIQUE: symbol, strike, expiry, right)
+6. **fundamental_data**: P/E, FCF, sector, earnings dates (UNIQUE: symbol, timestamp)
+7. **iv_history**: 52-week IV for IV Rank (UNIQUE: symbol, date)
+8. **sector_benchmarks**: Industry median P/E ratios
+
+### Fundamental Data Import Workflows
+```powershell
+# Option 1: IB Fundamentals API (requires active TWS connection)
+python import_fundamentals_ib.py
+
+# Option 2: Yahoo Finance (no TWS needed, less accurate)
+python import_fundamentals_simple.py
+
+# After import, check coverage:
+python backtest_criteria.py  # Shows filter funnel (why symbols excluded)
+```
+
+### Watchlist Management
+- **watchlist.csv**: Symbol, enabled, sector, market_cap, avg_volume_20d
+- **watchlist_manager.py**: WatchlistManager class for CSV I/O
+- **watchlist_cli.py**: CLI for add/remove/enable/disable symbols
+- **generate_sp500_watchlist.py**: Downloads S&P 500 constituents with metadata
+
+```powershell
+# Add symbol to watchlist
+python watchlist_cli.py add NVDA
+
+# Disable symbol temporarily
+python watchlist_cli.py disable TSLA
+
+# Regenerate from S&P 500
+python generate_sp500_watchlist.py
+```
+
+## Deployment & Monitoring
+
+### Windows Service Deployment
+```powershell
+# Install as service (requires Admin)
+.\install_service.ps1
+
+# Start/stop/status
+.\start_service.ps1
+.\stop_service.ps1
+.\status_service.ps1
+
+# Uninstall
+.\install_service.ps1 -Uninstall
+```
+
+### Linux Systemd Service
+```bash
+# Install (creates systemd unit)
+sudo ./install_service.sh
+
+# Control
+./start_service.sh
+./stop_service.sh
+./status_service.sh
+```
+
+### Web Monitoring Dashboard
+```powershell
+# Start Flask interface on http://localhost:5000
+python web_interface.py
+
+# Shows: Equity curve, open positions, recent trades, performance metrics
+```
+
+### Trading Journal
+```powershell
+# View last 7 days of trades
+python show_trading_journal.py
+
+# Outputs: Symbol, action, quantity, price, commission, strategy
+```
+
+## Trading Costs Architecture
+
+### TradingCostCalculator (`trading_costs.py`)
+- **Stock commissions**: Configurable per-order + min/max caps
+- **Option commissions**: Per-contract pricing
+- **Regulatory fees**: SEC ($27.80/M on sells), FINRA TAF ($0.000166/share)
+- **Slippage**: Percentage-based estimate (config.SLIPPAGE_PCT)
+- Methods return dict with itemized costs: `{'commission', 'sec_fee', 'finra_taf', 'slippage', 'total_cost', 'cost_pct'}`
+
+### Cost Configuration Pattern (config.py)
+```python
+# Interactive Brokers Tiered example:
+STOCK_COMMISSION_PER_ORDER = 5.00  # Flat fee per order
+OPTION_COMMISSION_PER_CONTRACT = 2.50  # Per contract
+SLIPPAGE_PCT = 0.001  # 0.1% market impact
+```
 
 ## Development Workflow
 
@@ -217,13 +343,15 @@ python main.py
 1. Test with `DRY_RUN=True` (no real orders)
 2. Test with Paper Trading (port 7497)
 3. Check logs in `logs/` for errors
-4. Validate with multiple symbols from `WATCHLIST_STOCKS`
-5. Update `.github/copilot-instructions.md` for architecture changes
+4. Validate with multiple symbols from watchlist.csv
+5. Run `backtest_criteria.py` to verify strategy filters
+6. Update `.github/copilot-instructions.md` for architecture changes
 
 ### No Test Suite
 - Project has no automated tests (`test*.py` files)
 - Manual testing via Paper Trading is the standard
 - Use TWS API demo account for validation
+- Use `backtest_criteria.py` for filter validation
 
 ### Logging Pattern
 ```python
@@ -231,3 +359,17 @@ logger.info("Success message")  # Normal operations
 logger.warning("Non-fatal issue") # Recoverable problems
 logger.error(f"Context: {e}")    # Failures with context
 ```
+
+## Advanced Features
+
+### Options Trading Requirements
+1. Enable in config: `ENABLE_OPTIONS_TRADING = True`
+2. Set strategy: `TRADING_STRATEGY = 'OPTIONS'`
+3. Import fundamentals: `python import_fundamentals_ib.py`
+4. Configure DTE, IV Rank, delta targets in config.py
+5. Greeks tracked in `options_data` table
+
+### Signal Handling
+- `main.py` registers SIGINT/SIGTERM handlers
+- Graceful shutdown: Disconnects from TWS, generates performance report
+- Auto-creates final equity chart on Ctrl+C
