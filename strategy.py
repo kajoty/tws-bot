@@ -27,8 +27,9 @@ class TradingStrategy:
             df['bb_upper'], df['bb_lower'] = df['bb_middle'] + (bb_std * 2), df['bb_middle'] - (bb_std * 2)
             df['macd'], df['macd_signal'], df['macd_hist'] = self._calculate_macd(df['close'])
             df['volume_ma'] = df['volume'].rolling(window=20).mean()
-            df['52w_high'] = df['close'].rolling(window=252, min_periods=1).max()
-            df['52w_low'] = df['close'].rolling(window=252, min_periods=1).min()
+            # 52W High/Low: use all available data instead of rolling(252) to avoid NaN with less data
+            df['52w_high'] = df['close'].expanding().max()
+            df['52w_low'] = df['close'].expanding().min()
         except Exception as e:
             logger.error(f"Fehler bei Indikatorberechnung: {e}")
         return df

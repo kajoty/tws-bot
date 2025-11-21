@@ -19,6 +19,11 @@ IB_CLIENT_ID = 1          # Eindeutige Client-ID (0-32)
 # Trading-Modus (WICHTIG: False = LIVE TRADING!)
 IS_PAPER_TRADING = True
 
+# Live Trading Bestätigung überspringen (NUR FÜR ERFAHRENE NUTZER!)
+# True = Keine Sicherheitsabfrage beim Start im Live-Modus
+# False = Bestätigung erforderlich (empfohlen)
+SKIP_LIVE_TRADING_CONFIRMATION = False
+
 # Automatische Port-Auswahl basierend auf Modus
 IB_PORT = IB_PORT_PAPER if IS_PAPER_TRADING else IB_PORT_LIVE
 
@@ -157,8 +162,8 @@ MAX_IV_PERCENTILE = 70  # Maximum implizite Volatilität (Perzentil)
 # ============================================================================
 
 # Handelsuniversum Filter
-MIN_MARKET_CAP = 5_000_000_000  # $5 Milliarden Minimum
-MIN_AVG_VOLUME = 500_000        # 500k durchschnittliches tägliches Volumen
+MIN_MARKET_CAP = 1_000_000_000  # $1 Milliarde Minimum (TEMPORÄR gelockert - avg_volume_20d fehlt in DB)
+MIN_AVG_VOLUME = 0              # Deaktiviert (TEMPORÄR - avg_volume_20d fehlt in DB)
 
 # 52-Wochen-Extrema Trigger
 TRIGGER_DISTANCE_52W_PERCENT = 0.02  # 2% Nähe zu 52W Hoch/Tief

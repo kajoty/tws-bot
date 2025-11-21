@@ -11,7 +11,7 @@ import pandas as pd
 import os
 
 app = Flask(__name__)
-db = DatabaseManager()
+db = DatabaseManager(config.DB_PATH)
 
 
 @app.route('/')

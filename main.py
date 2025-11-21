@@ -75,7 +75,7 @@ def main():
     print(f"  Dry Run:         {'Ja' if config.DRY_RUN else 'Nein'}")
     print("="*70 + "\n")
     
-    if not config.IS_PAPER_TRADING:
+    if not config.IS_PAPER_TRADING and not config.SKIP_LIVE_TRADING_CONFIRMATION:
         print("⚠️  WARNUNG: LIVE TRADING AKTIVIERT! ⚠️")
         print("Dieser Bot wird echte Orders mit echtem Geld platzieren!")
         response = input("Sind Sie sicher, dass Sie fortfahren möchten? (yes/no): ")

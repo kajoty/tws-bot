@@ -131,6 +131,8 @@ class DatabaseManager:
                     sector TEXT,
                     industry TEXT,
                     avg_volume_20d REAL,
+                    sector_median_pe REAL,
+                    next_earnings_date TEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(symbol, timestamp)
                 )
@@ -414,8 +416,8 @@ class DatabaseManager:
             cursor.execute("""
                 INSERT OR REPLACE INTO fundamental_data 
                 (symbol, market_cap, pe_ratio, free_cash_flow, revenue, earnings, 
-                 sector, industry, avg_volume_20d, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                 sector, industry, avg_volume_20d, sector_median_pe, next_earnings_date, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (
                 symbol,
                 data.get('market_cap'),
@@ -425,7 +427,9 @@ class DatabaseManager:
                 data.get('earnings'),
                 data.get('sector'),
                 data.get('industry'),
-                data.get('avg_volume_20d')
+                data.get('avg_volume_20d'),
+                data.get('sector_median_pe'),
+                data.get('next_earnings_date')
             ))
             
             self.conn.commit()

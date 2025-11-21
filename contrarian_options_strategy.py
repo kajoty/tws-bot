@@ -223,12 +223,14 @@ class ContrarianOptionsStrategy:
                 "reason": f"IV Rank {iv_rank:.1f} außerhalb 30-80 Range (zu extrem)"
             }
         
-        # 5. Prüfe Earnings Window
+        # 5. Prüfe Earnings Window (optional - nur wenn Daten vorhanden)
         earnings_date = fundamental_data.get('next_earnings_date')
-        earnings_safe, earnings_reason = self.check_earnings_window(earnings_date)
-        
-        if not earnings_safe:
-            return False, 0.0, {"reason": earnings_reason}
+        if earnings_date:  # Nur prüfen wenn Daten vorhanden
+            earnings_safe, earnings_reason = self.check_earnings_window(earnings_date)
+            if not earnings_safe:
+                return False, 0.0, {"reason": earnings_reason}
+        else:
+            logger.debug(f"{symbol}: Keine Earnings-Daten, überspringe Check")
         
         # Alle Kriterien erfüllt - berechne Confidence
         # Höhere Confidence bei stärkeren Signalen
@@ -350,12 +352,14 @@ class ContrarianOptionsStrategy:
                 "reason": f"IV Rank {iv_rank:.1f} außerhalb 30-80 Range (zu extrem)"
             }
         
-        # 5. Prüfe Earnings Window
+        # 5. Prüfe Earnings Window (optional - nur wenn Daten vorhanden)
         earnings_date = fundamental_data.get('next_earnings_date')
-        earnings_safe, earnings_reason = self.check_earnings_window(earnings_date)
-        
-        if not earnings_safe:
-            return False, 0.0, {"reason": earnings_reason}
+        if earnings_date:  # Nur prüfen wenn Daten vorhanden
+            earnings_safe, earnings_reason = self.check_earnings_window(earnings_date)
+            if not earnings_safe:
+                return False, 0.0, {"reason": earnings_reason}
+        else:
+            logger.debug(f"{symbol}: Keine Earnings-Daten, überspringe Check")
         
         # Alle Kriterien erfüllt - berechne Confidence
         fcf_strength = min(1.0, fcf_yield * 10)  # FCF Yield normalisiert
@@ -480,7 +484,7 @@ class ContrarianOptionsStrategy:
         """
         # Prüfe Universe Filter
         market_cap = fundamental_data.get('market_cap', 0)
-        avg_volume = fundamental_data.get('avg_volume', 0)
+        avg_volume = fundamental_data.get('avg_volume_20d', 0)  # Spalte heißt avg_volume_20d
         
         passes_filter, filter_reason = self.check_universe_filter(symbol, market_cap, avg_volume)
         if not passes_filter:
