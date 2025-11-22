@@ -30,6 +30,7 @@ logs/
 # Configuration
 config_local.py
 *.env
+.env.local
 
 # Trading data
 data/
@@ -38,6 +39,15 @@ plots/
 *.pkl
 *.png
 *.jpg
+
+# Docker
+.docker/
+docker-volumes/
+
+# Backups
+backups/
+*.backup
+*.bak
 
 # OS
 .DS_Store

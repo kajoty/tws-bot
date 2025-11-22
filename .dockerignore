@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data and Logs (werden als Volumes gemountet)
+data/
+logs/
+plots/
+
+# Git
+.git/
+.gitignore
+
+# Documentation (außer wichtige Dateien)
+*.md
+!README.md
+
+# Tests
+tests/
+pytest_cache/
+
+# Temporäre Dateien
+*.tmp
+*.bak
+.DS_Store
