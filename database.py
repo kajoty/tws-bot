@@ -32,7 +32,9 @@ class DatabaseManager:
         """Erstellt Datenbank-Tabellen."""
         try:
             # Erstelle Verzeichnis falls nicht vorhanden
-            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            db_dir = os.path.dirname(self.db_path)
+            if db_dir:  # Nur wenn Pfad ein Verzeichnis enthält
+                os.makedirs(db_dir, exist_ok=True)
             
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             cursor = self.conn.cursor()

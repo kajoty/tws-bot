@@ -14,10 +14,21 @@ if [ ! -f .env ]; then
     exit 1
 fi
 
+# Aktiviere virtuelle Umgebung
+if [ ! -d "venv" ]; then
+    echo "📦 Erstelle virtuelle Umgebung..."
+    python3 -m venv venv
+    source venv/bin/activate
+    echo "📥 Installiere Dependencies..."
+    pip install -r requirements.txt
+else
+    source venv/bin/activate
+fi
+
 # Check TWS connection (optional warning)
 echo "⚠️  Stelle sicher dass TWS läuft und API aktiviert ist!"
 echo ""
 
 # Start service
 echo "🚀 Starte Signal Service..."
-python3 signal_service.py
+python signal_service.py
