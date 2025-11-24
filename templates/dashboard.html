@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TWS Signal Dashboard</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        h1 { color: #333; text-align: center; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .stats { display: flex; justify-content: space-around; margin: 20px 0; }
+        .stat-box { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }
+        .signal { border: 1px solid #ccc; padding: 15px; margin: 10px 0; border-radius: 5px; background: white; }
+        .entry { background-color: #d4edda; border-color: #c3e6cb; }
+        .exit { background-color: #f8d7da; border-color: #f5c6cb; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; font-weight: bold; }
+        .filter-buttons { margin: 20px 0; text-align: center; }
+        .filter-btn { padding: 10px 20px; margin: 0 5px; border: none; border-radius: 5px; cursor: pointer; background: #007bff; color: white; }
+        .filter-btn.active { background: #0056b3; }
+        .chart-link { color: #007bff; text-decoration: none; }
+        .chart-link:hover { text-decoration: underline; }
+        .indicators { font-size: 0.9em; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>TWS Signal Dashboard</h1>
+
+        <!-- Zusammenfassungsstatistiken -->
+        <div class="stats">
+            <div class="stat-box">
+                <h3>Gesamt Ticker</h3>
+                <p>{{ total_tickers }}</p>
+            </div>
+            <div class="stat-box">
+                <h3>Durchschnittliche Trefferquote</h3>
+                <p>{{ "%.1f"|format(avg_rate) }}%</p>
+            </div>
+            <div class="stat-box">
+                <h3>Aktive Signale</h3>
+                <p>{{ total_signals }}</p>
+            </div>
+            <div class="stat-box">
+                <h3>Historische Signale</h3>
+                <p>{{ historical_signals|length }}</p>
+            </div>
+        </div>
+
+        <!-- Filter-Buttons -->
+        <div class="filter-buttons">
+            <a href="?filter=all" class="filter-btn {{ 'active' if filter_level == 'all' else '' }}">Alle</a>
+            <a href="?filter=100" class="filter-btn {{ 'active' if filter_level == '100' else '' }}">100%</a>
+            <a href="?filter=90" class="filter-btn {{ 'active' if filter_level == '90' else '' }}">90%+</a>
+            <a href="?filter=80" class="filter-btn {{ 'active' if filter_level == '80' else '' }}">80%+</a>
+            <a href="?filter=70" class="filter-btn {{ 'active' if filter_level == '70' else '' }}">70%+</a>
+        </div>
+
+        <!-- Aktuelle Signale -->
+        <h2>Aktuelle Signale</h2>
+        {% if signals %}
+            {% for signal in signals %}
+                <div class="signal {{ 'entry' if signal.type == 'entry' else 'exit' }}">
+                    <strong>{{ signal.symbol }}</strong> - {{ signal.type.upper() }} bei ${{ "%.2f"|format(signal.price) }}
+                    {% if signal.quantity %}
+                        <br>Quantität: {{ signal.quantity }} | Stop Loss: ${{ "%.2f"|format(signal.stop_loss) }} | Take Profit: ${{ "%.2f"|format(signal.take_profit) }}
+                    {% endif %}
+                    <br>Grund: {{ signal.reason }}
+                    <br><a href="/chart/{{ signal.symbol }}" class="chart-link">Chart anzeigen</a>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p>Keine Signale gefunden.</p>
+        {% endif %}
+
+        <!-- Trefferquoten-Übersicht -->
+        <h2>Trefferquoten-Übersicht</h2>
+        {% for level, entries in hit_rates.items() %}
+            {% if entries %}
+                <h3>{{ level }}% Treffer ({{ entries|length }} Ticker)</h3>
+                <table>
+                    <tr>
+                        <th>Ticker</th>
+                        <th>Trefferquote</th>
+                        <th>Aktive Indikatoren</th>
+                        <th>Aktueller Preis</th>
+                        <th>RSI</th>
+                        <th>MA Kurz/Lang</th>
+                        <th>MACD</th>
+                        <th>Chart</th>
+                    </tr>
+                    {% for entry in entries %}
+                        <tr>
+                            <td><strong>{{ entry.symbol }}</strong></td>
+                            <td>{{ "%.1f"|format(entry.rate) }}%</td>
+                            <td>{{ entry.indicators }}</td>
+                            <td>${{ "%.2f"|format(entry.current.price) }}</td>
+                            <td>{{ "%.1f"|format(entry.current.rsi) }}</td>
+                            <td>{{ "%.2f"|format(entry.current.ma_short) }} / {{ "%.2f"|format(entry.current.ma_long) }}</td>
+                            <td>{{ "%.4f"|format(entry.current.macd) }}</td>
+                            <td><a href="/chart/{{ entry.symbol }}" class="chart-link">Anzeigen</a></td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            {% endif %}
+        {% endfor %}
+
+        <!-- Historische Signale -->
+        <h2>Letzte Historische Signale</h2>
+        {% if historical_signals %}
+            <table>
+                <tr>
+                    <th>Zeitstempel</th>
+                    <th>Ticker</th>
+                    <th>Typ</th>
+                    <th>Preis</th>
+                    <th>Quantität</th>
+                    <th>Grund</th>
+                </tr>
+                {% for signal in historical_signals %}
+                    <tr>
+                        <td>{{ signal.timestamp }}</td>
+                        <td>{{ signal.symbol }}</td>
+                        <td>{{ signal.type }}</td>
+                        <td>${{ "%.2f"|format(signal.price) }}</td>
+                        <td>{{ signal.quantity }}</td>
+                        <td>{{ signal.reason }}</td>
+                    </tr>
+                {% endfor %}
+            </table>
+        {% else %}
+            <p>Keine historischen Signale gefunden.</p>
+        {% endif %}
+
+        <!-- Watchlist -->
+        <div class="watchlist">
+            <h2>Watchlist (erste 10)</h2>
+            <ul>
+                {% for stock in watchlist %}
+                    <li><a href="/chart/{{ stock }}" class="chart-link">{{ stock }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // Auto-refresh alle 60 Sekunden
+        setInterval(function() {
+            location.reload();
+        }, 60000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# Nicht gefundene Ticker in TWS
+# Diese Ticker konnten nicht in TWS gefunden werden (Error 200)
+# Für spätere Überprüfung oder Entfernung aus Watchlist
+
+BPMC
+SMAR
+BRK B
+FI

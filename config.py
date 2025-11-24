@@ -7,7 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 # Lade .env Datei
-load_dotenv()
+load_dotenv(override=True)
 
 # ============================================================================
 # TWS VERBINDUNG
@@ -15,8 +15,8 @@ load_dotenv()
 
 # TWS Verbindungsparameter
 IB_HOST = os.getenv("IB_HOST", "127.0.0.1")
-IB_PORT_PAPER = 7497      # Paper Trading Port (TWS)
-IB_PORT_LIVE = 7496       # Live Trading Port (TWS)
+IB_PORT_PAPER = 7497      
+IB_PORT_LIVE = 7496     
 IB_CLIENT_ID = int(os.getenv("IB_CLIENT_ID", "1"))
 
 # Trading-Modus
@@ -115,3 +115,36 @@ SIGNAL_ONLY_MODE = True
 
 # DRY RUN für Tests
 DRY_RUN = os.getenv("DRY_RUN", "False").lower() in ("true", "1", "yes")
+
+# ============================================================================
+# OPTIONEN-STRATEGIE FILTER (aus .env)
+# ============================================================================
+# Handelsuniversum
+MIN_MARKET_CAP = int(os.getenv("MIN_MARKET_CAP", "5000000000"))
+MIN_AVG_VOLUME = int(os.getenv("MIN_AVG_VOLUME", "500000"))
+MAX_POSITION_SIZE_PCT = float(os.getenv("MAX_POSITION_SIZE_PCT", "0.01"))
+
+# LONG PUT
+PUT_PROXIMITY_TO_HIGH_PCT = float(os.getenv("PUT_PROXIMITY_TO_HIGH_PCT", "0.02"))
+PUT_PE_RATIO_MULTIPLIER = float(os.getenv("PUT_PE_RATIO_MULTIPLIER", "1.5"))
+PUT_MIN_IV_RANK = int(os.getenv("PUT_MIN_IV_RANK", "70"))
+PUT_MIN_DTE = int(os.getenv("PUT_MIN_DTE", "60"))
+PUT_MAX_DTE = int(os.getenv("PUT_MAX_DTE", "90"))
+
+# LONG CALL
+CALL_PROXIMITY_TO_LOW_PCT = float(os.getenv("CALL_PROXIMITY_TO_LOW_PCT", "0.02"))
+CALL_MIN_FCF_YIELD = float(os.getenv("CALL_MIN_FCF_YIELD", "0.0"))
+CALL_MAX_IV_RANK = int(os.getenv("CALL_MAX_IV_RANK", "30"))
+CALL_MIN_DTE = int(os.getenv("CALL_MIN_DTE", "90"))
+CALL_MAX_DTE = int(os.getenv("CALL_MAX_DTE", "120"))
+CALL_TARGET_DELTA = float(os.getenv("CALL_TARGET_DELTA", "0.40"))
+
+# BEAR CALL SPREAD
+SPREAD_PROXIMITY_TO_HIGH_PCT = float(os.getenv("SPREAD_PROXIMITY_TO_HIGH_PCT", "0.02"))
+SPREAD_PE_RATIO_MULTIPLIER = float(os.getenv("SPREAD_PE_RATIO_MULTIPLIER", "1.5"))
+SPREAD_MIN_IV_RANK = int(os.getenv("SPREAD_MIN_IV_RANK", "70"))
+SPREAD_MIN_DTE = int(os.getenv("SPREAD_MIN_DTE", "30"))
+SPREAD_MAX_DTE = int(os.getenv("SPREAD_MAX_DTE", "45"))
+SPREAD_SHORT_DELTA_MIN = float(os.getenv("SPREAD_SHORT_DELTA_MIN", "0.25"))
+SPREAD_SHORT_DELTA_MAX = float(os.getenv("SPREAD_SHORT_DELTA_MAX", "0.35"))
+SPREAD_STRIKE_WIDTH = float(os.getenv("SPREAD_STRIKE_WIDTH", "5.0"))

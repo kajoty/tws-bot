@@ -39,6 +39,13 @@ class DatabaseManager:
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             cursor = self.conn.cursor()
             
+            # Aktiviere WAL-Modus für gleichzeitigen Lese-/Schreibzugriff
+            cursor.execute('PRAGMA journal_mode=WAL;')
+            cursor.execute('PRAGMA synchronous=NORMAL;')
+            cursor.execute('PRAGMA cache_size=1000;')
+            cursor.execute('PRAGMA temp_store=memory;')
+            self.conn.commit()
+            
             # Historische Preisdaten
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS historical_data (
@@ -80,11 +87,126 @@ class DatabaseManager:
                 ON signals(timestamp)
             """)
             
+            # Options-Positionen (erweitert für Spreads)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS options_positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    position_type TEXT NOT NULL,
+                    option_type TEXT NOT NULL,
+                    strike REAL NOT NULL,
+                    expiry TEXT NOT NULL,
+                    right TEXT NOT NULL,
+                    entry_premium REAL NOT NULL,
+                    entry_underlying_price REAL NOT NULL,
+                    dte_at_entry INTEGER NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    stop_loss_underlying REAL,
+                    take_profit_premium REAL,
+                    auto_close_dte INTEGER,
+                    current_premium REAL,
+                    current_underlying_price REAL,
+                    current_dte INTEGER,
+                    pnl REAL,
+                    pnl_pct REAL,
+                    status TEXT NOT NULL,
+                    short_strike REAL,
+                    long_strike REAL,
+                    spread_type TEXT,
+                    net_premium REAL,
+                    max_risk REAL,
+                    entry_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    exit_timestamp DATETIME,
+                    exit_reason TEXT
+                )
+            """)
+            
+            # Options-Signale (erweitert für Spreads)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS options_signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    signal_type TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    underlying_price REAL NOT NULL,
+                    high_52w REAL,
+                    low_52w REAL,
+                    proximity_pct REAL,
+                    iv_rank REAL,
+                    pe_ratio REAL,
+                    sector_pe REAL,
+                    fcf_yield REAL,
+                    market_cap REAL,
+                    avg_volume REAL,
+                    recommended_strike REAL,
+                    recommended_expiry TEXT,
+                    recommended_dte INTEGER,
+                    short_strike REAL,
+                    long_strike REAL,
+                    short_delta REAL,
+                    net_premium REAL,
+                    max_risk REAL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Fundamentaldaten Cache
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS fundamental_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL UNIQUE,
+                    pe_ratio REAL,
+                    market_cap REAL,
+                    fcf REAL,
+                    sector TEXT,
+                    avg_volume REAL,
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # IV Historie für IV Rank
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS iv_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    implied_volatility REAL,
+                    historical_volatility REAL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(symbol, date)
+                )
+            """)
+            
+            # Indizes für Options-Tabellen
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_options_positions_symbol 
+                ON options_positions(symbol)
+            """)
+            
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_options_positions_status 
+                ON options_positions(status)
+            """)
+            
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_options_signals_timestamp 
+                ON options_signals(timestamp)
+            """)
+            
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_fundamental_data_symbol 
+                ON fundamental_data(symbol)
+            """)
+            
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_iv_history_symbol 
+                ON iv_history(symbol)
+            """)
+            
             self.conn.commit()
-            logger.info("✓ Datenbank initialisiert")
+            logger.info("[OK] Datenbank initialisiert (inkl. Options-Tabellen)")
             
         except Exception as e:
-            logger.error(f"❌ Datenbank-Fehler: {e}")
+            logger.error(f"[FEHLER] Datenbank-Fehler: {e}")
     
     # ========================================================================
     # HISTORISCHE DATEN
@@ -118,10 +240,10 @@ class DatabaseManager:
                 ))
             
             self.conn.commit()
-            logger.debug(f"✓ {symbol}: {len(df)} Bars gespeichert")
+            logger.debug(f"[OK] {symbol}: {len(df)} Bars gespeichert")
             
         except Exception as e:
-            logger.error(f"❌ Fehler beim Speichern von {symbol}: {e}")
+            logger.error(f"[FEHLER] Fehler beim Speichern von {symbol}: {e}")
     
     def load_historical_data(self, symbol: str, days: int = None) -> pd.DataFrame:
         """
@@ -155,7 +277,7 @@ class DatabaseManager:
             return df
             
         except Exception as e:
-            logger.error(f"❌ Fehler beim Laden von {symbol}: {e}")
+            logger.error(f"[FEHLER] Fehler beim Laden von {symbol}: {e}")
             return pd.DataFrame()
     
     def needs_update(self, symbol: str, max_age_days: int = 1) -> bool:
@@ -188,7 +310,7 @@ class DatabaseManager:
             return age.days >= max_age_days
             
         except Exception as e:
-            logger.error(f"❌ Fehler bei Update-Check für {symbol}: {e}")
+            logger.error(f"[FEHLER] Fehler bei Update-Check für {symbol}: {e}")
             return True
     
     # ========================================================================
@@ -224,10 +346,10 @@ class DatabaseManager:
             ))
             
             self.conn.commit()
-            logger.debug(f"✓ Signal gespeichert: {signal_type} {symbol}")
+            logger.debug(f"[OK] Signal gespeichert: {signal_type} {symbol}")
             
         except Exception as e:
-            logger.error(f"❌ Fehler beim Speichern von Signal: {e}")
+            logger.error(f"[FEHLER] Fehler beim Speichern von Signal: {e}")
     
     def get_signals(self, days: int = 7, signal_type: str = None) -> pd.DataFrame:
         """
@@ -263,7 +385,7 @@ class DatabaseManager:
             return df
             
         except Exception as e:
-            logger.error(f"❌ Fehler beim Laden von Signalen: {e}")
+            logger.error(f"[FEHLER] Fehler beim Laden von Signalen: {e}")
             return pd.DataFrame()
     
     def get_signal_stats(self, days: int = 30) -> dict:
@@ -310,7 +432,7 @@ class DatabaseManager:
             }
             
         except Exception as e:
-            logger.error(f"❌ Fehler bei Statistik-Berechnung: {e}")
+            logger.error(f"[FEHLER] Fehler bei Statistik-Berechnung: {e}")
             return {}
     
     # ========================================================================
@@ -337,16 +459,331 @@ class DatabaseManager:
             self.conn.commit()
             
             if deleted > 0:
-                logger.info(f"✓ {deleted} alte Datenzeilen gelöscht")
+                logger.info(f"[OK] {deleted} alte Datenzeilen gelöscht")
             
         except Exception as e:
-            logger.error(f"❌ Cleanup-Fehler: {e}")
+            logger.error(f"[FEHLER] Cleanup-Fehler: {e}")
+    
+    # ========================================================================
+    # OPTIONS-DATEN
+    # ========================================================================
+    
+    def save_options_signal(self, signal: dict):
+        """
+        Speichert Options-Signal.
+        
+        Args:
+            signal: Signal-Dictionary
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO options_signals (
+                    signal_type, symbol, underlying_price, high_52w, low_52w,
+                    proximity_pct, iv_rank, pe_ratio, sector_pe, fcf_yield,
+                    market_cap, avg_volume, recommended_strike, recommended_expiry,
+                    recommended_dte
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                signal.get('type'),
+                signal.get('symbol'),
+                signal.get('underlying_price'),
+                signal.get('high_52w'),
+                signal.get('low_52w'),
+                signal.get('proximity_pct'),
+                signal.get('iv_rank'),
+                signal.get('pe_ratio'),
+                signal.get('sector_pe'),
+                signal.get('fcf_yield'),
+                signal.get('market_cap'),
+                signal.get('avg_volume'),
+                signal.get('recommended_strike'),
+                signal.get('recommended_expiry'),
+                signal.get('recommended_dte')
+            ))
+            
+            self.conn.commit()
+            logger.debug(f"[OK] Options-Signal gespeichert: {signal.get('type')} {signal.get('symbol')}")
+            
+        except Exception as e:
+            logger.error(f"[FEHLER] Fehler beim Speichern von Options-Signal: {e}")
+    
+    def save_options_position(self, position: dict):
+        """
+        Speichert neue Options-Position.
+        
+        Args:
+            position: Position-Dictionary
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO options_positions (
+                    symbol, option_type, strike, expiry, right, entry_premium,
+                    entry_underlying_price, dte_at_entry, quantity,
+                    stop_loss_underlying, take_profit_premium, auto_close_dte,
+                    current_premium, current_underlying_price, current_dte,
+                    pnl, pnl_pct, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                position.get('symbol'),
+                position.get('option_type'),
+                position.get('strike'),
+                position.get('expiry'),
+                position.get('right'),
+                position.get('entry_premium'),
+                position.get('entry_underlying_price'),
+                position.get('dte_at_entry'),
+                position.get('quantity'),
+                position.get('stop_loss_underlying'),
+                position.get('take_profit_premium'),
+                position.get('auto_close_dte'),
+                position.get('entry_premium'),  # current = entry at start
+                position.get('entry_underlying_price'),
+                position.get('dte_at_entry'),
+                0.0,  # pnl starts at 0
+                0.0,  # pnl_pct starts at 0
+                'OPEN'
+            ))
+            
+            self.conn.commit()
+            logger.info(f"[OK] Options-Position gespeichert: {position.get('option_type')} {position.get('symbol')}")
+            
+        except Exception as e:
+            logger.error(f"[FEHLER] Fehler beim Speichern von Options-Position: {e}")
+    
+    def update_options_position(self, position_id: int, updates: dict):
+        """
+        Aktualisiert existierende Options-Position.
+        
+        Args:
+            position_id: ID der Position
+            updates: Dictionary mit zu aktualisierenden Feldern
+        """
+        try:
+            # Baue UPDATE Query dynamisch
+            set_clauses = []
+            values = []
+            
+            for key, value in updates.items():
+                set_clauses.append(f"{key} = ?")
+                values.append(value)
+            
+            values.append(position_id)
+            
+            cursor = self.conn.cursor()
+            cursor.execute(f"""
+                UPDATE options_positions 
+                SET {', '.join(set_clauses)}
+                WHERE id = ?
+            """, values)
+            
+            self.conn.commit()
+            logger.debug(f"[OK] Options-Position {position_id} aktualisiert")
+            
+        except Exception as e:
+            logger.error(f"[FEHLER] Fehler beim Update von Options-Position: {e}")
+    
+    def close_options_position(self, position_id: int, exit_premium: float, 
+                               exit_reason: str):
+        """
+        Schließt Options-Position.
+        
+        Args:
+            position_id: ID der Position
+            exit_premium: Premium beim Exit
+            exit_reason: Grund für Exit
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            # Hole Position für PnL-Berechnung
+            cursor.execute("SELECT * FROM options_positions WHERE id = ?", (position_id,))
+            row = cursor.fetchone()
+            
+            if not row:
+                logger.warning(f"[WARNUNG] Position {position_id} nicht gefunden")
+                return
+            
+            # PnL berechnen
+            entry_premium = row[6]  # entry_premium
+            quantity = row[9]  # quantity
+            pnl = (exit_premium - entry_premium) * quantity * 100  # *100 für Options-Multiplikator
+            pnl_pct = ((exit_premium / entry_premium) - 1) * 100 if entry_premium > 0 else 0
+            
+            # Bestimme Status
+            status = 'CLOSED_PROFIT' if pnl > 0 else 'CLOSED_LOSS'
+            if 'AUTO' in exit_reason:
+                status = 'CLOSED_AUTO'
+            
+            # Update Position
+            cursor.execute("""
+                UPDATE options_positions 
+                SET current_premium = ?,
+                    pnl = ?,
+                    pnl_pct = ?,
+                    status = ?,
+                    exit_timestamp = ?,
+                    exit_reason = ?
+                WHERE id = ?
+            """, (exit_premium, pnl, pnl_pct, status, datetime.now().isoformat(), 
+                  exit_reason, position_id))
+            
+            self.conn.commit()
+            logger.info(f"[OK] Position {position_id} geschlossen: {exit_reason} | PnL: ${pnl:.2f} ({pnl_pct:+.2f}%)")
+            
+        except Exception as e:
+            logger.error(f"[FEHLER] Fehler beim Schließen von Position: {e}")
+    
+    def get_open_options_positions(self) -> list:
+        """
+        Lädt alle offenen Options-Positionen.
+        
+        Returns:
+            Liste von Dictionaries mit offenen Positionen
+        """
+        try:
+            df = pd.read_sql_query("""
+                SELECT * FROM options_positions 
+                WHERE status = 'OPEN'
+                ORDER BY entry_timestamp DESC
+            """, self.conn)
+            
+            if not df.empty:
+                df['entry_timestamp'] = pd.to_datetime(df['entry_timestamp'])
+                return df.to_dict('records')
+            else:
+                return []
+            
+        except Exception as e:
+            logger.error(f"[FEHLER] Fehler beim Laden von offenen Positionen: {e}")
+            return []
+    
+    def save_fundamental_data(self, symbol: str, data: dict):
+        """
+        Speichert/Aktualisiert Fundamentaldaten.
+        
+        Args:
+            symbol: Ticker Symbol
+            data: Dictionary mit Fundamentaldaten
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO fundamental_data (
+                    symbol, pe_ratio, market_cap, fcf, sector, avg_volume, last_updated
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                symbol,
+                data.get('pe_ratio'),
+                data.get('market_cap'),
+                data.get('fcf'),
+                data.get('sector'),
+                data.get('avg_volume'),
+                datetime.now().isoformat()
+            ))
+            
+            self.conn.commit()
+            logger.debug(f"[OK] Fundamentaldaten gespeichert: {symbol}")
+            
+        except Exception as e:
+            logger.error(f"[FEHLER] Fehler beim Speichern von Fundamentaldaten: {e}")
+    
+    def get_fundamental_data(self, symbol: str, max_age_days: int = 7) -> Optional[dict]:
+        """
+        Lädt gecachte Fundamentaldaten.
+        
+        Args:
+            symbol: Ticker Symbol
+            max_age_days: Maximales Alter in Tagen
+            
+        Returns:
+            Dictionary mit Daten oder None
+        """
+        try:
+            cursor = self.conn.cursor()
+            cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+            
+            cursor.execute("""
+                SELECT * FROM fundamental_data 
+                WHERE symbol = ? AND last_updated >= ?
+            """, (symbol, cutoff))
+            
+            row = cursor.fetchone()
+            
+            if row:
+                return {
+                    'pe_ratio': row[1],
+                    'market_cap': row[2],
+                    'fcf': row[3],
+                    'sector': row[4],
+                    'avg_volume': row[5],
+                    'last_updated': row[6]
+                }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"[FEHLER] Fehler beim Laden von Fundamentaldaten: {e}")
+            return None
+    
+    def save_iv_data(self, symbol: str, date: str, implied_vol: float, hist_vol: float):
+        """
+        Speichert IV-Daten für IV Rank Berechnung.
+        
+        Args:
+            symbol: Ticker Symbol
+            date: Datum
+            implied_vol: Implizite Volatilität
+            hist_vol: Historische Volatilität
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO iv_history (
+                    symbol, date, implied_volatility, historical_volatility
+                ) VALUES (?, ?, ?, ?)
+            """, (symbol, date, implied_vol, hist_vol))
+            
+            self.conn.commit()
+            
+        except Exception as e:
+            logger.error(f"[FEHLER] Fehler beim Speichern von IV-Daten: {e}")
+    
+    def get_iv_history(self, symbol: str, days: int = 252) -> pd.DataFrame:
+        """
+        Lädt IV-Historie für IV Rank Berechnung.
+        
+        Args:
+            symbol: Ticker Symbol
+            days: Anzahl Tage (default: 252 = 52 Wochen)
+            
+        Returns:
+            DataFrame mit IV-Daten
+        """
+        try:
+            cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+            
+            df = pd.read_sql_query("""
+                SELECT * FROM iv_history 
+                WHERE symbol = ? AND date >= ?
+                ORDER BY date ASC
+            """, self.conn, params=(symbol, cutoff))
+            
+            if not df.empty:
+                df['date'] = pd.to_datetime(df['date'])
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"[FEHLER] Fehler beim Laden von IV-Historie: {e}")
+            return pd.DataFrame()
     
     def close(self):
         """Schließt Datenbankverbindung."""
         if self.conn:
             self.conn.close()
-            logger.info("✓ Datenbankverbindung geschlossen")
+            logger.info("[OK] Datenbankverbindung geschlossen")
 
 
 if __name__ == "__main__":

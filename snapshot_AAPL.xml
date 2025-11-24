@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ReportSnapshot Major="1" Minor="0" Revision="1">
+	<CoIDs>
+		<CoID Type="RepNo">05680</CoID>
+		<CoID Type="CompanyName">Apple Inc</CoID>
+		<CoID Type="IRSNo">942404110</CoID>
+		<CoID Type="CIKNo">0000320193</CoID>
+		<CoID Type="OrganizationPermID">4295905573</CoID>
+	</CoIDs>
+	<Issues>
+		<Issue ID="1" Type="C" Desc="Common Stock" Order="1">
+			<IssueID Type="Name">Ordinary Shares</IssueID>
+			<IssueID Type="Ticker">AAPL</IssueID>
+			<IssueID Type="RIC">AAPL.O</IssueID>
+			<IssueID Type="DisplayRIC">AAPL.OQ</IssueID>
+			<IssueID Type="InstrumentPI">331724</IssueID>
+			<IssueID Type="QuotePI">7645713</IssueID>
+			<IssueID Type="InstrumentPermID">8590932301</IssueID>
+			<IssueID Type="QuotePermID">55835312773</IssueID>
+			<Exchange Code="NASD" Country="USA">NASDAQ</Exchange>
+			<GlobalListingType>OSR</GlobalListingType>
+			<MostRecentSplit Date="2020-08-31">4.0</MostRecentSplit>
+		</Issue>
+		<Issue ID="2" Type="P" Desc="Preferred Stock" Order="1">
+			<IssueID Type="Name">Preference Shares</IssueID>
+			<IssueID Type="InstrumentPI">100112850</IssueID>
+			<IssueID Type="InstrumentPermID">21482886553</IssueID>
+			<Exchange Code="NA" Country="">Not Available</Exchange>
+		</Issue>
+	</Issues>
+	<CoGeneralInfo>
+		<CoStatus Code="1">Active</CoStatus>
+		<CoType Code="EQU">Equity Issue</CoType>
+		<LastModified>2025-11-02</LastModified>
+		<LatestAvailableAnnual>2025-09-27</LatestAvailableAnnual>
+		<LatestAvailableInterim>2025-09-27</LatestAvailableInterim>
+		<Employees LastUpdated="2025-09-27">166000</Employees>
+		<SharesOut Date="2025-10-17" TotalFloat="14525377809.0">14776353000.0</SharesOut>
+		<ReportingCurrency Code="USD">U.S. Dollars</ReportingCurrency>
+		<MostRecentExchange Date="2025-11-17">1.0</MostRecentExchange>
+	</CoGeneralInfo>
+	<TextInfo>
+		<Text Type="Business Summary" lastModified="2024-11-12T14:08:27">Apple Inc. designs, manufactures and markets smartphones, personal computers, tablets, wearables and accessories, and sells a variety of related services. Its product categories include iPhone, Mac, iPad, and Wearables, Home and Accessories. Its software platforms include iOS, iPadOS, macOS, watchOS, visionOS, and tvOS. Its services include advertising, AppleCare, cloud services, digital content and payment services. The Company operates various platforms, including the App Store, that allow customers to discover and download applications and digital content, such as books, music, video, games and podcasts. It also offers digital content through subscription-based services, including Apple Arcade, Apple Fitness+, Apple Music, Apple News+, and Apple TV+. Its products include iPhone 16 Pro, iPhone 16, iPhone 15, iPhone 14, iPhone SE, MacBook Air, MacBook Pro, iMac, Mac mini, Mac Studio, Mac Pro, iPad Pro, iPad Air, AirPods, AirPods Pro, AirPods Max, Apple TV and Apple Vision Pro.</Text>
+		<Text Type="Financial Summary" lastModified="2025-11-02T21:19:45"> BRIEF: For the fiscal year ended 27 September 2025, Apple Inc revenues increased 6% to $416.16B. Net income before extraordinary items increased 7% to $111.52B. Revenues reflect Americas segment increase of 7% to $178.35B, Europe segment increase of 10% to $111.03B, Japan segment increase of 15% to $28.7B, Other countries segment increase of 10% to $199.99B, United States segment increase of 7% to $151.79B.</Text>
+	</TextInfo>
+	<contactInfo lastUpdated="2025-11-17T19:01:28">
+		<streetAddress line="1">One Apple Park Way</streetAddress>
+		<streetAddress line="2"></streetAddress>
+		<streetAddress line="3"></streetAddress>
+		<city>CUPERTINO</city>
+		<state-region>CA</state-region>
+		<postalCode>95014</postalCode>
+		<country code="USA">United States</country>
+		<contactName></contactName>
+		<contactTitle></contactTitle>
+		<phone>
+			<phone type="mainphone">
+				<countryPhoneCode>1</countryPhoneCode>
+				<city-areacode>408</city-areacode>
+				<number>9961010</number>
+			</phone>
+		</phone>
+	</contactInfo>
+	<webLinks lastUpdated="2017-06-29T16:30:55"><webSite mainCategory="Home Page">https://www.apple.com/</webSite><eMail mainCategory="Company Contact/E-mail">
+		</eMail></webLinks>
+	<peerInfo lastUpdated="2025-11-17T19:01:28">
+		<IndustryInfo>
+			<Industry type="TRBC" order="1" reported="0" code="5710602011" mnem="">Phones &amp; Smart Phones</Industry>
+			<Industry type="NAICS" order="1" reported="0" code="334220" mnem="">Radio and Television Broadcasting and Wireless Communications Equipment Manufacturing</Industry>
+			<Industry type="NAICS" order="2" reported="0" code="334111" mnem="">Electronic Computer Manufacturing</Industry>
+			<Industry type="NAICS" order="3" reported="0" code="513210" mnem="">Software Publishers</Industry>
+			<Industry type="NAICS" order="4" reported="0" code="334310" mnem="">Audio and Video Equipment Manufacturing</Industry>
+			<Industry type="NAICS" order="5" reported="0" code="334112" mnem="">Computer Storage Device Manufacturing</Industry>
+			<Industry type="NAICS" order="6" reported="0" code="449210" mnem="">Electronics and Appliance Retailers</Industry>
+			<Industry type="SIC" order="0" reported="1" code="3571" mnem="">Electronic Computers</Industry>
+			<Industry type="SIC" order="1" reported="0" code="3663" mnem="">Radio/tv Communications Equip</Industry>
+			<Industry type="SIC" order="2" reported="0" code="3571" mnem="">Electronic Computers</Industry>
+			<Industry type="SIC" order="3" reported="0" code="7372" mnem="">Prepackaged Software</Industry>
+			<Industry type="SIC" order="4" reported="0" code="3651" mnem="">Household Audio/video Equipment</Industry>
+			<Industry type="SIC" order="5" reported="0" code="3572" mnem="">Computer Storage Devices</Industry>
+			<Industry type="SIC" order="6" reported="0" code="5722" mnem="">Household Appliance Stores</Industry>
+		</IndustryInfo>
+		<Indexconstituet>S&amp;P 500</Indexconstituet>
+		<Indexconstituet>Dow Industry</Indexconstituet>
+	</peerInfo>
+	<officers>
+		<officer rank="1" since="03/1998">
+			<firstName>Timothy</firstName>
+			<mI>D.</mI>
+			<lastName>Cook</lastName>
+			<age>64 </age>
+			<title startYear="2011" startMonth="08" startDay="24" iD1="CEO" abbr1="CEO" iD2="DRC" abbr2="Dir.">Chief Executive Officer, Director</title>
+		</officer>
+		<officer rank="2" since="01/01/2025">
+			<firstName>Kevan</firstName>
+			<mI></mI>
+			<lastName>Parekh</lastName>
+			<age>53 </age>
+			<title startYear="2025" startMonth="01" startDay="01" iD1="CFO" abbr1="CFO" iD2="SVP" abbr2="Sr. VP">Senior Vice President, Chief Financial Officer</title>
+		</officer>
+		<officer rank="3" since="07/25/2025">
+			<firstName>Sabih</firstName>
+			<mI></mI>
+			<lastName>Khan</lastName>
+			<age>58 </age>
+			<title startYear="2025" startMonth="07" startDay="25" iD1="COO" abbr1="COO" iD2="" abbr2="">Chief Operating Officer</title>
+		</officer>
+		<officer rank="4" since="11/13/2017">
+			<firstName>Katherine</firstName>
+			<mI>L.</mI>
+			<lastName>Adams</lastName>
+			<age>60 </age>
+			<title startYear="2017" startMonth="11" startDay="13" iD1="SVP" abbr1="Sr. VP" iD2="GCN" abbr2="Counsel">Senior Vice President, General Counsel, Secretary</title>
+		</officer>
+		<officer rank="5" since="02/05/2019">
+			<firstName>Deirdre</firstName>
+			<mI></mI>
+			<lastName>O'Brien</lastName>
+			<age>58 </age>
+			<title startYear="2019" startMonth="02" startDay="05" iD1="SVP" abbr1="Sr. VP" iD2="" abbr2="">Senior Vice President - Retail and People</title>
+		</officer>
+	</officers>
+	<Ratios PriceCurrency="USD" ReportingCurrency="USD" ExchangeRate="1.00000" LatestAvailableDate="2025-09-27">
+		<Group ID="Price and Volume">
+			<Ratio FieldName="NPRICE" Type="N">266.25000</Ratio>
+			<Ratio FieldName="NHIG" Type="N">277.32000</Ratio>
+			<Ratio FieldName="NLOW" Type="N">169.21010</Ratio>
+			<Ratio FieldName="PDATE" Type="D">2025-11-20T00:00:00</Ratio>
+			<Ratio FieldName="VOL10DAVG" Type="N">45.60714</Ratio>
+			<Ratio FieldName="EV" Type="N">3978164.00000</Ratio>
+		</Group>
+		<Group ID="Income Statement">
+			<Ratio FieldName="MKTCAP" Type="N">3934204.00000</Ratio>
+			<Ratio FieldName="TTMREV" Type="N">416161.00000</Ratio>
+			<Ratio FieldName="TTMEBITD" Type="N">144749.00000</Ratio>
+			<Ratio FieldName="TTMNIAC" Type="N">111524.00000</Ratio>
+		</Group>
+		<Group ID="Per share data">
+			<Ratio FieldName="TTMEPSXCLX" Type="N">7.42657</Ratio>
+			<Ratio FieldName="TTMREVPS" Type="N">27.73538</Ratio>
+			<Ratio FieldName="QBVPS" Type="N">4.99098</Ratio>
+			<Ratio FieldName="QCSHPS" Type="N">3.70243</Ratio>
+			<Ratio FieldName="TTMCFSHR" Type="N">8.21223</Ratio>
+			<Ratio FieldName="TTMDIVSHR" Type="N">1.03000</Ratio>
+		</Group>
+		<Group ID="Other Ratios">
+			<Ratio FieldName="TTMGROSMGN" Type="N">46.90516</Ratio>
+			<Ratio FieldName="TTMROEPCT" Type="N">170.67870</Ratio>
+			<Ratio FieldName="TTMPR2REV" Type="N">9.45356</Ratio>
+			<Ratio FieldName="PEEXCLXOR" Type="N">35.85101</Ratio>
+			<Ratio FieldName="PRICE2BK" Type="N">53.34627</Ratio>
+			<Ratio FieldName="Employees" Type="N">166000</Ratio>
+		</Group>
+	</Ratios>
+	<ForecastData ConsensusType="Mean" CurFiscalYear="2026" CurFiscalYearEndMonth="9" CurInterimEndCalYear="2025" CurInterimEndMonth="12" EarningsBasis="PRX">
+		<Ratio FieldName="ConsRecom" Type="N">
+			<Value PeriodType="CURR">2.0652</Value>
+		</Ratio>
+		<Ratio FieldName="TargetPrice" Type="N">
+			<Value PeriodType="CURR">282.84000</Value>
+		</Ratio>
+		<Ratio FieldName="ProjLTGrowthRate" Type="N">
+			<Value PeriodType="CURR">11.7500</Value>
+		</Ratio>
+		<Ratio FieldName="ProjPE" Type="N">
+			<Value PeriodType="CURR">32.19468</Value>
+		</Ratio>
+		<Ratio FieldName="ProjSales" Type="N">
+			<Value PeriodType="CURR">452505.69880</Value>
+		</Ratio>
+		<Ratio FieldName="ProjSalesQ" Type="N">
+			<Value PeriodType="CURR">138081.49240</Value>
+		</Ratio>
+		<Ratio FieldName="ProjEPS" Type="N">
+			<Value PeriodType="CURR">8.27000</Value>
+		</Ratio>
+		<Ratio FieldName="ProjEPSQ" Type="N">
+			<Value PeriodType="CURR">2.66390</Value>
+		</Ratio>
+		<Ratio FieldName="ProjProfit" Type="N">
+			<Value PeriodType="CURR">120595.97950</Value>
+		</Ratio>
+		<Ratio FieldName="ProjDPS" Type="N">
+			<Value PeriodType="CURR">1.06490</Value>
+		</Ratio>
+	</ForecastData>
+</ReportSnapshot>

@@ -24,11 +24,11 @@ class PushoverNotifier:
         self.api_token = api_token or config.PUSHOVER_API_TOKEN
         
         if not self.user_key or not self.api_token:
-            logger.warning("⚠️ Pushover Credentials fehlen! Benachrichtigungen deaktiviert.")
+            logger.warning("[WARNUNG] Pushover Credentials fehlen! Benachrichtigungen deaktiviert.")
             self.enabled = False
         else:
             self.enabled = True
-            logger.info("✓ Pushover Benachrichtigungen aktiviert")
+            logger.info("[OK] Pushover Benachrichtigungen aktiviert")
     
     def send_entry_signal(self, symbol: str, price: float, quantity: int, 
                          reason: str, stop_loss: float = None, take_profit: float = None):
@@ -47,7 +47,7 @@ class PushoverNotifier:
             logger.info(f"[DRY RUN] Entry Signal: BUY {quantity} {symbol} @ ${price:.2f}")
             return
         
-        title = f"🟢 BUY Signal: {symbol}"
+        title = f"[BUY] BUY Signal: {symbol}"
         
         message = f"Entry: ${price:.2f}\n"
         message += f"Anzahl: {quantity}\n"
@@ -55,9 +55,9 @@ class PushoverNotifier:
         message += f"\nGrund: {reason}"
         
         if stop_loss:
-            message += f"\n\n🛑 Stop Loss: ${stop_loss:.2f}"
+            message += f"\n\n[SL] Stop Loss: ${stop_loss:.2f}"
         if take_profit:
-            message += f"\n🎯 Take Profit: ${take_profit:.2f}"
+            message += f"\n[TP] Take Profit: ${take_profit:.2f}"
         
         self._send_notification(title, message, priority=1)  # High priority für Entry
     
@@ -81,10 +81,10 @@ class PushoverNotifier:
         
         # Icon basierend auf Gewinn/Verlust
         if pnl > 0:
-            icon = "🟢"
+            icon = "[+]"
             title = f"{icon} SELL (Gewinn): {symbol}"
         else:
-            icon = "🔴"
+            icon = "[-]"
             title = f"{icon} SELL (Verlust): {symbol}"
         
         message = f"Exit: ${price:.2f}\n"
@@ -137,10 +137,10 @@ class PushoverNotifier:
                 sound=config.PUSHOVER_SOUND
             )
             
-            logger.info(f"✓ Pushover gesendet: {title}")
+            logger.info(f"[OK] Pushover gesendet: {title}")
             
         except Exception as e:
-            logger.error(f"❌ Pushover Fehler: {e}")
+            logger.error(f"[FEHLER] Pushover Fehler: {e}")
     
     def test_notification(self):
         """Sendet Test-Benachrichtigung."""
@@ -150,14 +150,14 @@ class PushoverNotifier:
         
         try:
             self._send_notification(
-                "🧪 TWS Signal Service",
+                "[TEST] TWS Signal Service",
                 "Test-Benachrichtigung erfolgreich!\n\nDer Signal-Service ist bereit.",
                 priority=0
             )
-            logger.info("✓ Test-Benachrichtigung gesendet")
+            logger.info("[OK] Test-Benachrichtigung gesendet")
             return True
         except Exception as e:
-            logger.error(f"❌ Test fehlgeschlagen: {e}")
+            logger.error(f"[FEHLER] Test fehlgeschlagen: {e}")
             return False
 
 

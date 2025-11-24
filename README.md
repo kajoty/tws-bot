@@ -10,6 +10,9 @@ Signal-Service für Interactive Brokers TWS. Generiert Entry/Exit Trading-Signal
 - **🔄 Automatischer Scan**: Konfigurierbare Scan-Intervalle
 - **📈 Position Tracking**: Exit-Signale für aktive Positionen (Stop Loss, Take Profit)
 - **🎯 Multi-Signal Logic**: Kombiniert mehrere Indikatoren für bessere Qualität
+- **🌐 Web Dashboard**: Live-Monitoring mit Charts und Statistiken
+- **📈 Interaktive Charts**: Plotly-basierte Preis-Charts mit Indikatoren
+- **📊 Echtzeit-Daten**: Live-Updates alle 60 Sekunden
 
 ## 📋 Voraussetzungen
 
@@ -90,6 +93,37 @@ Du solltest eine Test-Nachricht auf deinem Smartphone erhalten.
 python3 signal_service.py
 ```
 
+## 🌐 Web Dashboard
+
+### Features
+- **📊 Live-Dashboard**: Aktuelle Signale und Trefferquoten
+- **📈 Interaktive Charts**: Preis-Charts mit Moving Averages
+- **📱 Responsive Design**: Funktioniert auf Desktop und Mobile
+- **🔄 Auto-Refresh**: Echtzeit-Updates alle 60 Sekunden
+- **🎯 Filter-Optionen**: Nach Trefferquoten filtern
+
+### Dashboard starten
+
+```bash
+# Web-App starten (läuft parallel zum Signal-Service)
+python3 web_app.py
+```
+
+Öffne http://127.0.0.1:5000 in deinem Browser.
+
+### Dashboard-Features
+
+#### Haupt-Dashboard
+- **Zusammenfassungsstatistiken**: Gesamt-Ticker, durchschnittliche Trefferquote, aktive Signale
+- **Aktuelle Signale**: Entry/Exit Signale mit Risikomanagement-Details
+- **Trefferquoten-Übersicht**: Gefilterte Ansicht nach Signal-Qualität
+- **Historische Signale**: Letzte Trading-Signale aus der Datenbank
+
+#### Chart-Ansichten
+- **Preis-Charts**: Mit Moving Average Indikatoren
+- **Direkte Links**: Von jedem Ticker zur Chart-Ansicht
+- **Zoom & Pan**: Interaktive Chart-Navigation
+
 ## 🔔 Benachrichtigungen
 
 ### Entry Signal
@@ -152,10 +186,14 @@ SCAN_INTERVAL = 300  # 5 Minuten (in Sekunden)
 ```
 tws-bot/
 ├── signal_service.py      # Hauptprogramm (Signal-Generierung)
+├── web_app.py            # Flask Web-Dashboard
 ├── pushover_notifier.py   # Pushover Benachrichtigungen
 ├── database.py            # SQLite Datenbank
 ├── config.py              # Konfiguration
 ├── requirements.txt       # Python Dependencies
+├── templates/             # HTML Templates
+│   ├── dashboard.html     # Haupt-Dashboard
+│   └── chart.html         # Chart-Ansicht
 ├── .env                   # Credentials (nicht in Git!)
 ├── .env.example           # Beispiel-Konfiguration
 └── README.md              # Diese Datei
