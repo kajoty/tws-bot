@@ -126,7 +126,7 @@ class PushoverNotifier:
             return
         
         try:
-            priority = priority if priority is not None else config.PUSHOVER_PRIORITY
+            priority = priority if priority is not None else PUSHOVER_PRIORITY
             
             api = PushoverAPI(self.api_token)
             api.send_message(
@@ -134,7 +134,7 @@ class PushoverNotifier:
                 message,
                 title=title,
                 priority=priority,
-                sound=config.PUSHOVER_SOUND
+                sound=PUSHOVER_SOUND
             )
             
             logger.info(f"[OK] Pushover gesendet: {title}")

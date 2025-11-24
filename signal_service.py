@@ -11,13 +11,18 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
+from ibapi.contract import Contract
 
 from tws_bot.config.settings import (
     WATCHLIST_STOCKS, SCAN_INTERVAL, HISTORY_DAYS, DATA_MAX_AGE_DAYS,
     LOG_LEVEL, LOG_FILE, SIGNAL_ONLY_MODE, DRY_RUN,
     MIN_MARKET_CAP, MIN_AVG_VOLUME, PUT_PE_RATIO_MULTIPLIER, PUT_MIN_IV_RANK,
     CALL_MIN_FCF_YIELD, CALL_MAX_IV_RANK, SPREAD_PE_RATIO_MULTIPLIER, SPREAD_MIN_IV_RANK,
-    IB_HOST, IB_PORT, IS_PAPER_TRADING, PUSHOVER_USER_KEY
+    IB_HOST, IB_PORT, IS_PAPER_TRADING, PUSHOVER_USER_KEY,
+    PUT_PROXIMITY_TO_HIGH_PCT, PUT_MIN_DTE, PUT_MAX_DTE,
+    CALL_PROXIMITY_TO_LOW_PCT, CALL_MIN_DTE, CALL_MAX_DTE, CALL_TARGET_DELTA,
+    SPREAD_PROXIMITY_TO_HIGH_PCT, SPREAD_MIN_DTE, SPREAD_MAX_DTE,
+    SPREAD_SHORT_DELTA_MIN, SPREAD_SHORT_DELTA_MAX, SPREAD_STRIKE_WIDTH
 )
 from tws_bot.notifications.pushover import PushoverNotifier
 from tws_bot.data.database import DatabaseManager
@@ -26,14 +31,25 @@ from tws_bot.core.indicators import calculate_indicators
 from tws_bot.core.indicators import calculate_indicators
 from tws_bot.api.tws_connector import TWSConnector
 
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
-)
+try:
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(LOG_FILE),
+            logging.StreamHandler()
+        ]
+    )
+except PermissionError:
+    # Fallback: Nur Konsolen-Logging wenn Datei-Lock
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
+    print("WARNUNG: Log-Datei gesperrt - verwende nur Konsolen-Logging")
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +71,23 @@ class SignalService(TWSConnector):
             avg_vol_val = 0.0
         result['market_cap'] = market_cap_val >= MIN_MARKET_CAP
         result['avg_volume'] = avg_vol_val >= MIN_AVG_VOLUME
-        # PE Ratio Branchenvergleich (Dummy: vergleiche numerisch)
-        try:
-            pe_val = float(fund.get('pe_ratio', 0)) if fund else 0.0
-        except Exception:
-            pe_val = 0.0
-        result['pe_ratio_mult'] = pe_val > PUT_PE_RATIO_MULTIPLIER * 10  # TODO: Branchen-Median
+
+        # PE Ratio Branchenvergleich (gegen Branchen-Median)
+        sector_pe_median = self.db.get_sector_pe_median(fund.get('sector')) if fund and fund.get('sector') else None
+        if sector_pe_median and fund and fund.get('pe_ratio'):
+            try:
+                pe_val = float(fund.get('pe_ratio', 0))
+                result['pe_ratio_mult'] = pe_val > sector_pe_median * PUT_PE_RATIO_MULTIPLIER
+            except Exception:
+                result['pe_ratio_mult'] = False
+        else:
+            # Fallback: einfache Multiplikation wenn kein Branchen-Median verfügbar
+            try:
+                pe_val = float(fund.get('pe_ratio', 0)) if fund else 0.0
+                result['pe_ratio_mult'] = pe_val > PUT_PE_RATIO_MULTIPLIER * 10  # TODO: Branchen-Median
+            except Exception:
+                result['pe_ratio_mult'] = False
+
         # IV Rank (echt)
         iv_df = self.db.get_iv_history(symbol, days=252)
         iv_rank = None
@@ -71,10 +98,32 @@ class SignalService(TWSConnector):
             if iv_max > iv_min:
                 iv_rank = 100 * (current_iv - iv_min) / (iv_max - iv_min)
         result['iv_rank'] = iv_rank is not None and iv_rank >= PUT_MIN_IV_RANK
-        # DTE (Dummy: immer True, da keine Optionsdaten)
-        result['dte'] = True  # TODO: DTE aus options_positions
-        # Nähe zum Hoch (Dummy: immer True, da keine Kursdaten)
-        result['proximity_high'] = True  # TODO: aus historical_data
+
+        # DTE (Days to Expiration) aus verfügbaren Optionspositionen
+        options_positions = self.db.get_options_positions(symbol, status='ACTIVE')
+        dte_values = []
+        for pos in options_positions:
+            if pos.get('current_dte') and pos['current_dte'] > 0:
+                dte_values.append(pos['current_dte'])
+        if dte_values:
+            avg_dte = sum(dte_values) / len(dte_values)
+            result['dte'] = PUT_MIN_DTE <= avg_dte <= PUT_MAX_DTE
+        else:
+            result['dte'] = False  # Keine Optionsdaten verfügbar
+
+        # Nähe zum 52W Hoch (aus historischen Daten)
+        hist_df = self.db.load_historical_data(symbol, days=252)  # 52 Wochen
+        if not hist_df.empty and 'high' in hist_df.columns:
+            current_price = hist_df.iloc[-1]['close']
+            high_52w = hist_df['high'].max()
+            if high_52w > 0:
+                proximity_pct = abs(current_price - high_52w) / high_52w
+                result['proximity_high'] = proximity_pct <= PUT_PROXIMITY_TO_HIGH_PCT
+            else:
+                result['proximity_high'] = False
+        else:
+            result['proximity_high'] = False
+
         return result
 
     def check_long_call_filters(self, symbol: str) -> dict:
@@ -106,12 +155,43 @@ class SignalService(TWSConnector):
             if iv_max > iv_min:
                 iv_rank = 100 * (current_iv - iv_min) / (iv_max - iv_min)
         result['iv_rank'] = iv_rank is not None and iv_rank <= CALL_MAX_IV_RANK
-        # DTE (Dummy)
-        result['dte'] = True  # TODO
-        # Nähe zum Tief (Dummy)
-        result['proximity_low'] = True  # TODO
-        # Delta (Dummy)
-        result['delta'] = True  # TODO
+
+        # DTE (Days to Expiration) aus verfügbaren Optionspositionen
+        options_positions = self.db.get_options_positions(symbol, status='ACTIVE')
+        dte_values = []
+        for pos in options_positions:
+            if pos.get('current_dte') and pos['current_dte'] > 0:
+                dte_values.append(pos['current_dte'])
+        if dte_values:
+            avg_dte = sum(dte_values) / len(dte_values)
+            result['dte'] = CALL_MIN_DTE <= avg_dte <= CALL_MAX_DTE
+        else:
+            result['dte'] = False  # Keine Optionsdaten verfügbar
+
+        # Nähe zum 52W Tief (aus historischen Daten)
+        hist_df = self.db.load_historical_data(symbol, days=252)  # 52 Wochen
+        if not hist_df.empty and 'low' in hist_df.columns:
+            current_price = hist_df.iloc[-1]['close']
+            low_52w = hist_df['low'].min()
+            if low_52w > 0:
+                proximity_pct = abs(current_price - low_52w) / low_52w
+                result['proximity_low'] = proximity_pct <= CALL_PROXIMITY_TO_LOW_PCT
+            else:
+                result['proximity_low'] = False
+        else:
+            result['proximity_low'] = False
+
+        # Delta-Berechnung für verfügbare Calls
+        delta_values = []
+        for pos in options_positions:
+            if pos.get('option_type') == 'CALL' and pos.get('delta') is not None:
+                delta_values.append(abs(pos['delta']))
+        if delta_values:
+            avg_delta = sum(delta_values) / len(delta_values)
+            result['delta'] = abs(avg_delta - CALL_TARGET_DELTA) <= 0.1  # ±0.1 Toleranz
+        else:
+            result['delta'] = False  # Keine Delta-Daten verfügbar
+
         return result
 
     def check_bear_call_spread_filters(self, symbol: str) -> dict:
@@ -129,12 +209,23 @@ class SignalService(TWSConnector):
             avg_vol_val = 0.0
         result['market_cap'] = market_cap_val >= MIN_MARKET_CAP
         result['avg_volume'] = avg_vol_val >= MIN_AVG_VOLUME
-        # PE Ratio Branchenvergleich (Dummy)
-        try:
-            pe_val = float(fund.get('pe_ratio', 0)) if fund else 0.0
-        except Exception:
-            pe_val = 0.0
-        result['pe_ratio_mult'] = pe_val > SPREAD_PE_RATIO_MULTIPLIER * 10  # TODO
+
+        # PE Ratio Branchenvergleich (gegen Branchen-Median)
+        sector_pe_median = self.db.get_sector_pe_median(fund.get('sector')) if fund and fund.get('sector') else None
+        if sector_pe_median and fund and fund.get('pe_ratio'):
+            try:
+                pe_val = float(fund.get('pe_ratio', 0))
+                result['pe_ratio_mult'] = pe_val > sector_pe_median * SPREAD_PE_RATIO_MULTIPLIER
+            except Exception:
+                result['pe_ratio_mult'] = False
+        else:
+            # Fallback: einfache Multiplikation wenn kein Branchen-Median verfügbar
+            try:
+                pe_val = float(fund.get('pe_ratio', 0)) if fund else 0.0
+            except Exception:
+                pe_val = 0.0
+            result['pe_ratio_mult'] = pe_val > SPREAD_PE_RATIO_MULTIPLIER * 10  # TODO
+
         # IV Rank (echt)
         iv_df = self.db.get_iv_history(symbol, days=252)
         iv_rank = None
@@ -145,12 +236,46 @@ class SignalService(TWSConnector):
             if iv_max > iv_min:
                 iv_rank = 100 * (current_iv - iv_min) / (iv_max - iv_min)
         result['iv_rank'] = iv_rank is not None and iv_rank >= SPREAD_MIN_IV_RANK
-        # DTE (Dummy)
-        result['dte'] = True  # TODO
-        # Delta (Dummy)
-        result['delta'] = True  # TODO
-        # Strike Width (Dummy)
-        result['strike_width'] = True  # TODO
+
+        # DTE (Days to Expiration) aus verfügbaren Optionspositionen
+        options_positions = self.db.get_options_positions(symbol, status='ACTIVE')
+        dte_values = []
+        for pos in options_positions:
+            if pos.get('current_dte') and pos['current_dte'] > 0:
+                dte_values.append(pos['current_dte'])
+        if dte_values:
+            avg_dte = sum(dte_values) / len(dte_values)
+            result['dte'] = SPREAD_MIN_DTE <= avg_dte <= SPREAD_MAX_DTE
+        else:
+            result['dte'] = False  # Keine Optionsdaten verfügbar
+
+        # Delta-Berechnung für Short Calls in Spreads
+        short_call_deltas = []
+        for pos in options_positions:
+            if (pos.get('position_type') == 'BEAR_CALL_SPREAD' and
+                pos.get('option_type') == 'CALL' and
+                pos.get('delta') is not None):
+                short_call_deltas.append(abs(pos['delta']))
+        if short_call_deltas:
+            avg_short_delta = sum(short_call_deltas) / len(short_call_deltas)
+            result['delta'] = SPREAD_SHORT_DELTA_MIN <= avg_short_delta <= SPREAD_SHORT_DELTA_MAX
+        else:
+            result['delta'] = False  # Keine Spread-Delta-Daten verfügbar
+
+        # Strike Width Analyse für Spreads
+        strike_widths = []
+        for pos in options_positions:
+            if (pos.get('position_type') == 'BEAR_CALL_SPREAD' and
+                pos.get('short_strike') is not None and
+                pos.get('long_strike') is not None):
+                width = abs(pos['short_strike'] - pos['long_strike'])
+                strike_widths.append(width)
+        if strike_widths:
+            avg_width = sum(strike_widths) / len(strike_widths)
+            result['strike_width'] = avg_width >= SPREAD_STRIKE_WIDTH
+        else:
+            result['strike_width'] = False  # Keine Spread-Positions verfügbar
+
         return result
 
     def scan_strategy_filters(self):
@@ -218,6 +343,9 @@ class SignalService(TWSConnector):
     
     def __init__(self):
         TWSConnector.__init__(self)
+        
+        # Überschreibe Client ID für Signal Service
+        self.client_id = 3
         
         self.db = DatabaseManager()
         self.notifier = PushoverNotifier()

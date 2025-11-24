@@ -13,6 +13,10 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 from pytz import timezone
+from dotenv import load_dotenv
+
+# Lade Environment Variables
+load_dotenv(override=True)
 
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
@@ -20,8 +24,9 @@ from ibapi.contract import Contract
 
 import config
 import options_config as opt_config
-from database import DatabaseManager
-from pushover_notifier import PushoverNotifier
+from tws_bot.data.database import DatabaseManager
+from tws_bot.notifications.pushover import PushoverNotifier
+from tws_bot.api.tws_connector import TWSConnector
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,24 @@ class OptionsScanner(EWrapper, EClient):
         self.db = DatabaseManager()
         self.notifier = PushoverNotifier()
         
+        # Watchlist (wird dynamisch gefiltert)
+        self.watchlist = config.WATCHLIST_STOCKS
+        
+        # Lade Portfolio-Daten für Covered Calls
+        self.portfolio_data = self._load_portfolio_data()
+        
+        # Erweitere Watchlist um Portfolio-Symbole für Covered Calls
+        portfolio_symbols = set(self.portfolio_data.keys())
+        watchlist_symbols = set(self.watchlist)
+        self.watchlist = list(watchlist_symbols.union(portfolio_symbols))
+        
+        logger.info(f"Watchlist erweitert: {len(self.watchlist)} Symbole ({len(portfolio_symbols)} aus Portfolio)")
+        
+        # Lade Earnings-Daten intelligent:
+        # 1. Portfolio-Symbole immer laden (für Covered Calls)
+        # 2. Watchlist-Symbole nur wenn Rate-Limits erlauben
+        self.earnings_data = self._load_earnings_data_smart()
+        
         self.connected = False
         self.next_valid_order_id = None
         
@@ -57,12 +80,311 @@ class OptionsScanner(EWrapper, EClient):
         # Aktive Positionen
         self.active_positions: Dict[str, Dict] = {}
         
-        # Watchlist (wird dynamisch gefiltert)
-        self.watchlist = config.WATCHLIST_STOCKS
-        
         self.running = False
         
         logger.info(f"Options-Scanner initialisiert: {host}:{port} (Client ID: {client_id})")
+    
+    def _load_portfolio_data(self) -> Dict[str, Dict]:
+        """
+        Lädt Portfolio-Daten von TWS für Covered Call Strategie.
+        
+        Returns:
+            Dict mit Symbol -> {'quantity': int, 'avg_cost': float, ...}
+        """
+        try:
+            logger.info("Lade Portfolio-Daten für Covered Calls...")
+            tws_connector = TWSConnector()
+            
+            if tws_connector.connect_to_tws():
+                portfolio_data = tws_connector.get_portfolio_data()
+                tws_connector.disconnect()
+                
+                # Filtere nur Aktien-Positionen (keine Optionen)
+                stock_positions = {}
+                positions_list = portfolio_data.get('positions', [])
+                
+                for pos in positions_list:
+                    symbol = pos.get('symbol', '')
+                    position_qty = pos.get('position', 0)
+                    sec_type = pos.get('secType', 'STK')  # Annahme: Default STK wenn nicht angegeben
+                    
+                    if sec_type == 'STK' and position_qty > 0:
+                        avg_cost = pos.get('avgCost', 0)
+                        unrealized_pnl = pos.get('unrealizedPNL', 0)
+                        market_price = pos.get('marketPrice', 0)
+                        is_approximation = False
+                        
+                        # Fallback: Wenn avgCost 0 ist, berechne aus marketPrice und unrealizedPNL
+                        if avg_cost == 0 and market_price > 0 and position_qty > 0:
+                            # Einstandspreis = Aktueller Preis - (Unrealized P&L / Anzahl Aktien)
+                            avg_cost = market_price - (unrealized_pnl / position_qty)
+                            is_approximation = True
+                            logger.warning(f"[WARNUNG] {symbol}: avgCost war 0, berechne aus P&L ${avg_cost:.2f} (Preis: ${market_price:.2f}, P&L: ${unrealized_pnl:.2f})")
+                        
+                        logger.info(f"[INFO] Portfolio Position: {symbol} - Qty: {position_qty}, avgCost: ${avg_cost:.2f} {'(APPROX)' if is_approximation else ''}")
+                        stock_positions[symbol] = {
+                            'quantity': position_qty,
+                            'avg_cost': avg_cost,
+                            'market_value': pos.get('marketValue', 0),
+                            'unrealized_pnl': unrealized_pnl,
+                            'is_approximation': is_approximation
+                        }
+                
+                logger.info(f"Portfolio geladen: {len(stock_positions)} Aktien-Positionen")
+                return stock_positions
+            else:
+                logger.warning("TWS Verbindung für Portfolio-Daten fehlgeschlagen")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"Fehler beim Laden von Portfolio-Daten: {e}")
+            return {}
+    
+    def _load_earnings_data_smart(self) -> Dict[str, Dict]:
+        """
+        Intelligentes Laden von Earnings-Daten mit Rate-Limit-Management.
+        
+        Strategie:
+        1. Portfolio-Symbole immer laden (für Covered Calls kritisch)
+        2. Zusätzliche Watchlist-Symbole laden bis Rate-Limit erreicht
+        3. Rest mit Simulation auffüllen
+        
+        Returns:
+            Dict mit Symbol -> earnings data
+        """
+        earnings_data = {}
+        
+        # 1. Portfolio-Symbole immer laden (Priorität!)
+        portfolio_symbols = list(self.portfolio_data.keys())
+        logger.info(f"Lade Earnings-Daten für {len(portfolio_symbols)} Portfolio-Symbole (Priorität)...")
+        
+        for symbol in portfolio_symbols:
+            earnings_info = self._fetch_alpha_vantage_earnings(symbol)
+            if earnings_info and earnings_info.get('earnings_date'):
+                earnings_date = earnings_info['earnings_date']
+                days_until = (earnings_date - datetime.now()).days
+                is_earnings_week = days_until <= 7 and days_until >= -1
+                
+                earnings_data[symbol] = {
+                    'earnings_date': earnings_date,
+                    'days_until': days_until,
+                    'is_earnings_week': is_earnings_week,
+                    'status': earnings_info.get('source', 'alpha_vantage')
+                }
+            else:
+                earnings_data[symbol] = self._simulate_earnings_date(symbol)
+        
+        # 2. Zusätzliche Watchlist-Symbole laden (bis Rate-Limit erreicht)
+        remaining_watchlist = [s for s in self.watchlist if s not in earnings_data]
+        max_additional_calls = 20  # Sicherheitsreserve unter 25/Tag
+        
+        if remaining_watchlist:
+            calls_used = len([s for s in earnings_data.values() if s.get('status') in ['alpha_vantage', 'cached']])
+            calls_available = max(0, max_additional_calls - calls_used)
+            
+            if calls_available > 0:
+                symbols_to_load = remaining_watchlist[:calls_available]
+                logger.info(f"Lade Earnings-Daten für {len(symbols_to_load)} zusätzliche Watchlist-Symbole...")
+                
+                for symbol in symbols_to_load:
+                    earnings_info = self._fetch_alpha_vantage_earnings(symbol)
+                    if earnings_info and earnings_info.get('earnings_date'):
+                        earnings_date = earnings_info['earnings_date']
+                        days_until = (earnings_date - datetime.now()).days
+                        is_earnings_week = days_until <= 7 and days_until >= -1
+                        
+                        earnings_data[symbol] = {
+                            'earnings_date': earnings_date,
+                            'days_until': days_until,
+                            'is_earnings_week': is_earnings_week,
+                            'status': earnings_info.get('source', 'alpha_vantage')
+                        }
+                    else:
+                        earnings_data[symbol] = self._simulate_earnings_date(symbol)
+        
+        # 3. Rest mit Simulation auffüllen
+        for symbol in self.watchlist:
+            if symbol not in earnings_data:
+                earnings_data[symbol] = self._simulate_earnings_date(symbol)
+        
+        # Statistiken loggen
+        api_calls = len([s for s in earnings_data.values() if s.get('status') in ['alpha_vantage', 'cached']])
+        cached = len([s for s in earnings_data.values() if s.get('status') == 'cached'])
+        simulated = len([s for s in earnings_data.values() if s.get('status') in ['simulated', 'simulated_fallback']])
+        
+        logger.info(f"Earnings-Daten geladen: {len(earnings_data)} Symbole "
+                   f"({api_calls} API/Cached, {cached} gecached, {simulated} simuliert)")
+        
+        return earnings_data
+    
+    def _ensure_earnings_data(self, symbol: str) -> None:
+        """
+        Stellt sicher, dass Earnings-Daten für ein Symbol verfügbar sind.
+        Lazy loading für Symbole außerhalb des Portfolios.
+        
+        Args:
+            symbol: Das Symbol für das Earnings-Daten benötigt werden
+        """
+        if symbol in self.earnings_data:
+            return  # Bereits geladen
+        
+        # Lazy loading für dieses Symbol
+        logger.debug(f"Lade Earnings-Daten lazy für {symbol}...")
+        
+        earnings_info = self._fetch_alpha_vantage_earnings(symbol)
+        if earnings_info and earnings_info.get('earnings_date'):
+            earnings_date = earnings_info['earnings_date']
+            days_until = (earnings_date - datetime.now()).days
+            is_earnings_week = days_until <= 7 and days_until >= -1
+            
+            self.earnings_data[symbol] = {
+                'earnings_date': earnings_date,
+                'days_until': days_until,
+                'is_earnings_week': is_earnings_week,
+                'status': 'lazy_loaded'
+            }
+        else:
+            # Fallback: Simuliere Earnings
+            self.earnings_data[symbol] = self._simulate_earnings_date(symbol)
+    
+    def _fetch_alpha_vantage_earnings(self, symbol: str) -> Optional[Dict]:
+        """
+        Lädt Earnings-Daten von Alpha Vantage API mit intelligentem Caching.
+        
+        WICHTIG: Alpha Vantage kostenloser Plan = nur 25 Calls/Tag!
+        Daher ist Caching entscheidend für die Rate-Limits.
+        
+        Args:
+            symbol: Ticker Symbol
+            
+        Returns:
+            Dict mit earnings_date oder None
+        """
+        try:
+            # Zuerst prüfen, ob Daten bereits in DB gecached sind (max 7 Tage alt)
+            cached_data = self.db.get_earnings_date(symbol)
+            if cached_data:
+                earnings_date = cached_data['earnings_date']
+                logger.debug(f"[CACHE] {symbol}: Earnings-Daten aus Cache ({cached_data['last_updated'][:10]})")
+                return {
+                    'earnings_date': earnings_date,
+                    'source': 'cached'
+                }
+            
+            import requests
+            
+            # Alpha Vantage API Key aus Config laden
+            api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
+            if not api_key:
+                logger.debug(f"Alpha Vantage API Key nicht konfiguriert für {symbol}")
+                return None
+            
+            # Rate Limiting: 25 Calls/Tag = max 1 Call alle 57 Minuten!
+            # Da wir cachen, machen wir nur Calls für neue Daten
+            if hasattr(self, '_last_api_call'):
+                time_since_last = (datetime.now() - self._last_api_call).total_seconds()
+                min_interval = 60 * 57  # 57 Minuten zwischen Calls (25/Tag = 1 Call/57min)
+                if time_since_last < min_interval:
+                    logger.debug(f"[RATE LIMIT] {symbol}: Überspringe API-Call (letzter Call vor {time_since_last/60:.1f}min)")
+                    return None
+            
+            logger.info(f"[API] {symbol}: Lade Earnings-Daten von Alpha Vantage (kostenloser Plan: 25 Calls/Tag)")
+            
+            # Verwende EARNINGS Funktion statt EARNINGS_CALENDAR (bessere Datenverfügbarkeit)
+            url = f"https://www.alphavantage.co/query?function=EARNINGS&symbol={symbol}&apikey={api_key}"
+            
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            self._last_api_call = datetime.now()  # Timestamp für Rate Limiting
+            
+            # Prüfe auf Rate Limit Nachricht
+            if 'Note' in data and 'rate limit' in data['Note'].lower():
+                logger.warning(f"[RATE LIMIT] {symbol}: Alpha Vantage Rate-Limit erreicht - verwende Cache/Simulation")
+                return None
+            
+            # Parse quarterly earnings data
+            if 'quarterlyEarnings' in data and data['quarterlyEarnings']:
+                # Nimm das nächste zukünftige Earnings-Datum
+                future_earnings = []
+                now = datetime.now()
+                
+                for earning in data['quarterlyEarnings']:
+                    if 'reportedDate' in earning:
+                        try:
+                            reported_date = datetime.fromisoformat(earning['reportedDate'].replace('Z', '+00:00'))
+                            if reported_date > now:
+                                future_earnings.append(reported_date)
+                        except:
+                            continue
+                
+                if future_earnings:
+                    # Nächstes Earnings-Datum
+                    next_earnings = min(future_earnings)
+                    
+                    # Speichere in DB für Caching
+                    self.db.save_earnings_date(symbol, next_earnings)
+                    
+                    logger.info(f"[API] {symbol}: Nächste Earnings am {next_earnings.date()}")
+                    return {
+                        'earnings_date': next_earnings,
+                        'source': 'alpha_vantage'
+                    }
+            
+            logger.debug(f"[API] {symbol}: Keine zukünftigen Earnings-Daten gefunden")
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Alpha Vantage API Fehler für {symbol}: {e}")
+            return None
+    
+    def _simulate_earnings_date(self, symbol: str) -> Dict:
+        """
+        Simuliert Earnings-Daten als Fallback wenn keine API verfügbar ist.
+        
+        In Produktion: Verwende Alpha Vantage, Financial Modeling Prep oder IEX Cloud API.
+        Diese Simulation basiert auf typischen Quartalsberichten (alle 3 Monate).
+        
+        Args:
+            symbol: Ticker Symbol
+            
+        Returns:
+            Simulierte Earnings-Daten
+        """
+        # Simuliere: Earnings alle 3 Monate, zufälliger Tag im Monat
+        import random
+        now = datetime.now()
+        
+        # Finde nächsten simulierten Earnings-Termin (alle 3 Monate)
+        months_until_next = 3 - (now.month % 3)
+        if months_until_next == 0:
+            months_until_next = 3
+            
+        next_earnings = now.replace(day=1) + timedelta(days=32)
+        next_earnings = next_earnings.replace(day=random.randint(1, 28))
+        
+        days_until = (next_earnings - now).days
+        
+        return {
+            'earnings_date': next_earnings,
+            'days_until': days_until,
+            'is_earnings_week': days_until <= 7 and days_until >= -1,
+            'status': 'simulated_fallback'
+        }
+    
+    def _is_earnings_risk_period(self, symbol: str) -> bool:
+        """
+        Prüft, ob ein Symbol in einer risikoreichen Earnings-Periode ist.
+        
+        Returns:
+            True wenn Signal blockiert werden sollte (zu nah an Earnings)
+        """
+        if symbol not in self.earnings_data:
+            return False  # Keine Daten = kein Risiko bekannt
+        
+        earnings_info = self.earnings_data[symbol]
+        return earnings_info.get('is_earnings_week', False)
     
     # ========================================================================
     # TWS CALLBACKS
@@ -334,6 +656,418 @@ class OptionsScanner(EWrapper, EClient):
         contract.lastTradeDateOrContractMonth = expiry  # Format: YYYYMMDD
         contract.multiplier = "100"
         return contract
+    
+    # ========================================================================
+    # KOSTENBERECHNUNG
+    # ========================================================================
+    
+    def calculate_strategy_costs(self, strategy_type: str, quantity: int = 1, 
+                                net_premium: float = 0.0) -> Dict[str, float]:
+        """
+        Berechnet die Kommissionskosten für verschiedene Optionsstrategien.
+        
+        Args:
+            strategy_type: "LONG_PUT", "LONG_CALL", "BEAR_CALL_SPREAD", etc.
+            quantity: Anzahl der Kontrakte (default: 1)
+            net_premium: Netto-Prämie des Spreads (für Spread-Strategien)
+            
+        Returns:
+            Dict mit 'commission', 'total_cost', 'breakeven_adjusted'
+        """
+        from tws_bot.config.settings import (
+            OPTIONS_COMMISSION_PER_CONTRACT, 
+            SPREAD_COMMISSION_MULTIPLIER
+        )
+        
+        base_commission = OPTIONS_COMMISSION_PER_CONTRACT
+        
+        if strategy_type in ["LONG_PUT", "LONG_CALL"]:
+            # Single Option Position: 1 Kontrakt = 1 Kommission
+            commission = base_commission * quantity
+            
+        elif strategy_type == "BEAR_CALL_SPREAD":
+            # Spread: 2 Beine (Short Call + Long Call) = 2 Kommissionen
+            commission = base_commission * SPREAD_COMMISSION_MULTIPLIER * 2 * quantity
+            
+        elif strategy_type == "BULL_PUT_SPREAD":
+            # Spread: 2 Beine (Short Put + Long Put) = 2 Kommissionen  
+            commission = base_commission * SPREAD_COMMISSION_MULTIPLIER * 2 * quantity
+            
+        elif strategy_type == "IRON_CONDOR":
+            # 4 Beine (2 Short + 2 Long) = 4 Kommissionen
+            commission = base_commission * SPREAD_COMMISSION_MULTIPLIER * 4 * quantity
+            
+        elif strategy_type == "SHORT_PUT":
+            # Single Short Option Position: 1 Kontrakt
+            commission = base_commission * quantity
+            
+        elif strategy_type == "COVERED_CALL":
+            # Covered Call: Verkauf von 1 Call (Short Position)
+            commission = base_commission * quantity
+            
+        else:
+            # Fallback für unbekannte Strategien
+            commission = base_commission * quantity
+            logger.warning(f"[WARNUNG] Unbekannte Strategie {strategy_type} - verwende Single-Option Kosten")
+        
+        # Gesamtkosten = Kommission (bereits in €)
+        total_cost = commission
+        
+        # Break-even angepasst um Kommission
+        # Bei Long-Positionen erhöht sich Break-even um Kommission
+        # Bei Short-Positionen/Spreads wird Netto-Prämie um Kommission reduziert
+        if strategy_type in ["LONG_PUT", "LONG_CALL"]:
+            # Long Option: Höherer Break-even
+            breakeven_adjusted = net_premium + (commission / (quantity * 100))  # Pro Aktie
+        else:
+            # Spreads: Niedrigere Netto-Prämie
+            breakeven_adjusted = net_premium - (commission / (quantity * 100))  # Pro Aktie
+        
+        return {
+            'commission': commission,
+            'total_cost': total_cost,
+            'breakeven_adjusted': breakeven_adjusted,
+            'cost_per_contract': commission / quantity if quantity > 0 else 0
+        }
+    
+    def calculate_strategy_profitability(self, strategy_type: str, signal_data: Dict) -> Dict[str, float]:
+        """
+        Berechnet Rentabilität einer Strategie inkl. Kommissionen und Ausstiegsszenarien.
+        
+        Args:
+            strategy_type: Typ der Strategie
+            signal_data: Signal-Daten aus check_*_setup()
+            
+        Returns:
+            Dict mit Rentabilitäts-Kennzahlen und Ausstiegsszenarien
+        """
+        # Basis-Daten aus Signal
+        max_profit = signal_data.get('max_profit', 0)
+        max_risk = signal_data.get('max_risk', 0)
+        net_premium = signal_data.get('net_premium', 0)
+        quantity = signal_data.get('quantity', 1)
+        
+        # Kosten berechnen
+        costs = self.calculate_strategy_costs(strategy_type, quantity, net_premium)
+        
+        # Ausstiegsszenarien berechnen
+        exit_scenarios = self.calculate_exit_scenarios(strategy_type, signal_data)
+        
+        # Angepasste Kennzahlen
+        adjusted_max_profit = max_profit - costs['commission']
+        adjusted_net_premium = net_premium - costs['commission']
+        
+        # Risk-Reward Ratio (bereinigt)
+        if max_risk > 0:
+            rr_ratio = adjusted_max_profit / max_risk
+        else:
+            rr_ratio = 0
+        
+        # Profitabilität in %
+        if max_risk > 0:
+            profitability_pct = (adjusted_max_profit / max_risk) * 100
+        else:
+            profitability_pct = 0
+        
+        # Break-even Wahrscheinlichkeit (grob geschätzt)
+        # Annahme: 30% Chance auf Max Profit, 70% Chance auf Max Loss
+        expected_value = (adjusted_max_profit * 0.3) + (-max_risk * 0.7)
+        
+        # Empfehlung basierend auf Szenarien
+        recommendation = self._get_profitability_recommendation(exit_scenarios, strategy_type)
+        
+        return {
+            'adjusted_max_profit': adjusted_max_profit,
+            'adjusted_net_premium': adjusted_net_premium,
+            'rr_ratio': rr_ratio,
+            'profitability_pct': profitability_pct,
+            'expected_value': expected_value,
+            'costs': costs,
+            'exit_scenarios': exit_scenarios,
+            'recommendation': recommendation
+        }
+    
+    def calculate_exit_scenarios(self, strategy_type: str, signal_data: Dict) -> Dict[str, Dict]:
+        """
+        Berechnet verschiedene Ausstiegsszenarien inkl. aller Kosten.
+        
+        Args:
+            strategy_type: Typ der Strategie
+            signal_data: Signal-Daten aus check_*_setup()
+            
+        Returns:
+            Dict mit Szenarien: 'expires_worthless', 'early_profit_exit', 'early_loss_exit'
+        """
+        quantity = signal_data.get('quantity', 1)
+        entry_premium = signal_data.get('net_premium', signal_data.get('premium', 0))
+        
+        # Einstiegskosten
+        entry_costs = self.calculate_strategy_costs(strategy_type, quantity, entry_premium)
+        
+        scenarios = {}
+        
+        # Szenario 1: Option verfällt wertlos (nur Einstiegskosten)
+        if strategy_type in ['SHORT_PUT', 'BEAR_CALL_SPREAD']:
+            # Bei Short-Positionen: wertlos verfallen = Max Profit
+            scenarios['expires_worthless'] = {
+                'description': 'Option verfällt wertlos',
+                'total_costs': entry_costs['commission'],
+                'net_result': entry_premium - entry_costs['commission'],
+                'profitability': 'Max Profit'
+            }
+        else:
+            # Bei Long-Positionen: wertlos verfallen = Max Loss
+            max_loss = signal_data.get('max_risk', abs(entry_premium))
+            scenarios['expires_worthless'] = {
+                'description': 'Option verfällt wertlos',
+                'total_costs': entry_costs['commission'],
+                'net_result': -max_loss - entry_costs['commission'],
+                'profitability': 'Max Loss'
+            }
+        
+        # Szenario 2: Vorzeitiger Ausstieg mit Gewinn (50% des Max Profits)
+        exit_profit = 0
+        if strategy_type in ['SHORT_PUT', 'BEAR_CALL_SPREAD']:
+            exit_profit = entry_premium * 0.5  # 50% Gewinn
+        else:
+            exit_profit = entry_premium * 1.5  # 50% über Break-even
+        
+        exit_costs = self.calculate_strategy_costs(strategy_type, quantity, exit_profit)
+        total_costs_profit = entry_costs['commission'] + exit_costs['commission']
+        net_profit = exit_profit - total_costs_profit
+        
+        scenarios['early_profit_exit'] = {
+            'description': f'Vorzeitiger Ausstieg mit {exit_profit:.2f}€ Gewinn',
+            'total_costs': total_costs_profit,
+            'net_result': net_profit,
+            'profitability': f'{"Profit" if net_profit > 0 else "Loss"} ({net_profit:.2f}€)'
+        }
+        
+        # Szenario 3: Vorzeitiger Ausstieg mit Verlust (50% Verlust)
+        exit_loss = entry_premium * 0.3  # 70% Verlust
+        exit_costs_loss = self.calculate_strategy_costs(strategy_type, quantity, exit_loss)
+        total_costs_loss = entry_costs['commission'] + exit_costs_loss['commission']
+        net_loss = exit_loss - total_costs_loss
+        
+        scenarios['early_loss_exit'] = {
+            'description': f'Vorzeitiger Ausstieg mit {exit_loss:.2f}€ Verlust',
+            'total_costs': total_costs_loss,
+            'net_result': net_loss,
+            'profitability': f'Loss ({net_loss:.2f}€)'
+        }
+        
+        return scenarios
+    
+    def check_covered_call_setup(self, symbol: str, df: pd.DataFrame) -> Optional[Dict]:
+        """
+        Prüft Covered Call Setup (Verkauf von Calls auf eigene Aktien-Positionen).
+        
+        Strategie: Verkaufe Calls auf Aktien nahe dem 52W-Hoch
+        - Konträre Erwartung: Aktien am Hoch fallen eher (Mean Reversion)
+        - Zusätzliche Filter: Position muss profitabel sein (Preis > Einstandspreis)
+        - Ziel: Prämie kassieren + Aktien mit Gewinn halten
+        
+        Covered Call = Long Stock + Short Call
+        - Max Profit: Premium + (Strike - Einstandspreis) pro Aktie
+        - Max Risk: Einstandspreis - Strike + Premium (wenn Aktie fällt)
+        - Break-even: Einstandspreis - Premium
+        
+        Returns:
+            Signal-Dict oder None
+        """
+        if len(df) == 0:
+            return None
+        
+        # Stelle sicher, dass Earnings-Daten verfügbar sind (lazy loading)
+        self._ensure_earnings_data(symbol)
+        
+        # Earnings-Risiko-Prüfung: Blockiere Signale während Earnings-Periode
+        if self._is_earnings_risk_period(symbol):
+            logger.info(f"[INFO] {symbol}: Covered Call Signal blockiert - Earnings-Periode")
+            return None
+        
+        current_price = df.iloc[-1]['close']
+        high_52w, low_52w = self.calculate_52w_extremes(df)
+        
+        # 1. Portfolio-Prüfung: Hat der User diese Aktie?
+        if symbol not in self.portfolio_data:
+            return None
+        
+        position = self.portfolio_data[symbol]
+        owned_quantity = position.get('quantity', 0)
+        avg_cost = position.get('avg_cost', 0)
+        is_approximation = position.get('is_approximation', False)
+        
+        if owned_quantity < 100:  # Mindestens 1 Kontrakt (100 Aktien)
+            logger.debug(f"[DEBUG] {symbol}: Nicht genügend Aktien ({owned_quantity} < 100)")
+            return None
+        
+        # 1.5. Approximation prüfen - überspringe Positionen ohne echten avg_cost
+        if is_approximation:
+            logger.debug(f"[DEBUG] {symbol}: avg_cost ist Approximation, überspringe für Covered Calls")
+            return None
+        
+        # 1.6. Profitabilität der Position prüfen
+        if current_price <= avg_cost:
+            logger.debug(f"[DEBUG] {symbol}: Position nicht profitabel (Preis: ${current_price:.2f} <= Einstand: ${avg_cost:.2f})")
+            return None
+        
+        # 2. Technischer Trigger: Nahe 52W-Hoch (für Covered Calls geeignet)
+        proximity_threshold = high_52w * (1 - opt_config.COVERED_CALL_PROXIMITY_TO_HIGH_PCT)
+        if current_price < proximity_threshold:
+            return None
+        
+        # 3. Fundamentale Prüfung: Nicht überbewertet
+        if symbol not in self.fundamental_data_cache:
+            logger.warning(f"[WARNUNG] {symbol}: Keine Fundamentaldaten")
+            return None
+        
+        fundamentals = self.fundamental_data_cache[symbol]
+        pe_ratio = fundamentals.get('pe_ratio')
+        sector = fundamentals.get('sector', 'Unknown')
+        market_cap = fundamentals.get('market_cap')
+        avg_volume = fundamentals.get('avg_volume')
+        
+        # Filter: Marktkapitalisierung und Volumen
+        if market_cap and market_cap < opt_config.MIN_MARKET_CAP:
+            return None
+        
+        if avg_volume and avg_volume < opt_config.MIN_AVG_VOLUME:
+            return None
+        
+        if not pe_ratio or pe_ratio <= 0:
+            return None
+        
+        sector_pe_median = self._get_sector_median_pe(sector)
+        
+        # Für Covered Calls: Nicht extrem überbewertet (aber höher als für Long Puts)
+        if pe_ratio > sector_pe_median * opt_config.COVERED_CALL_PE_RATIO_MULTIPLIER:
+            logger.debug(f"[DEBUG] {symbol}: Zu überbewertet für Covered Call (P/E {pe_ratio:.1f})")
+            return None
+        
+        # 4. Finde passenden Call Strike
+        call_strike = self.find_covered_call_strike(symbol, current_price, position)
+        
+        if not call_strike:
+            return None
+        
+        # 5. IV Rank Prüfung (hohes IV für Prämieneinnahme)
+        self.request_option_greeks(
+            symbol,
+            call_strike['strike'],
+            'C',
+            call_strike['expiry']
+        )
+        
+        self.wait_for_requests(timeout=10)
+        
+        # Hole IV
+        current_iv = None
+        for req_data in self.pending_requests.values():
+            if (req_data.get('symbol') == symbol and
+                req_data.get('strike') == call_strike['strike']):
+                greeks = req_data.get('greeks', {})
+                current_iv = greeks.get('implied_volatility')
+                break
+        
+        if current_iv is None:
+            # Fallback
+            if symbol in self.historical_data_cache:
+                df_temp = self.historical_data_cache[symbol]
+                returns = np.log(df_temp['close'] / df_temp['close'].shift(1))
+                current_iv = returns.std() * np.sqrt(252) * 100
+        
+        if current_iv:
+            iv_rank = self.calculate_iv_rank(symbol, current_iv)
+        else:
+            iv_rank = 50.0
+        
+        if iv_rank < opt_config.COVERED_CALL_MIN_IV_RANK:
+            logger.debug(f"[DEBUG] {symbol}: IV Rank {iv_rank:.1f} < {opt_config.COVERED_CALL_MIN_IV_RANK}")
+            return None
+        
+        # Berechne Rentabilität
+        max_contracts = owned_quantity // 100  # Wie viele Kontrakte können verkauft werden
+        premium_per_contract = call_strike['premium']
+        
+        # Max Profit: Premium + Upside bis Strike
+        max_profit_per_contract = premium_per_contract + (call_strike['strike'] - position['avg_cost']) * 100
+        max_risk_per_contract = (position['avg_cost'] - call_strike['strike']) * 100 + premium_per_contract
+        
+        # Kostenberechnung
+        costs = self.calculate_strategy_costs('COVERED_CALL', max_contracts, premium_per_contract)
+        profitability = self.calculate_strategy_profitability('COVERED_CALL', {
+            'max_profit': max_profit_per_contract,
+            'max_risk': max_risk_per_contract,
+            'net_premium': premium_per_contract,
+            'quantity': max_contracts
+        })
+        
+        return {
+            'type': 'COVERED_CALL',
+            'symbol': symbol,
+            'underlying_price': current_price,
+            'high_52w': high_52w,
+            'proximity_pct': ((current_price / high_52w) - 1) * 100,
+            'pe_ratio': pe_ratio,
+            'sector_pe': sector_pe_median,
+            'owned_quantity': owned_quantity,
+            'avg_cost': position['avg_cost'],
+            'market_value': position['market_value'],
+            'unrealized_pnl': position['unrealized_pnl'],
+            'iv_rank': iv_rank,
+            'call_strike': call_strike['strike'],
+            'call_delta': call_strike['delta'],
+            'premium_per_contract': premium_per_contract,
+            'max_contracts': max_contracts,
+            'max_profit_per_contract': max_profit_per_contract,
+            'max_risk_per_contract': max_risk_per_contract,
+            'recommended_expiry': call_strike['expiry'],
+            'recommended_dte': call_strike['dte'],
+            # Kosten & Rentabilität
+            'commission': costs['commission'],
+            'total_cost': costs['total_cost'],
+            'adjusted_max_profit': profitability['adjusted_net_premium'],
+            'rr_ratio': profitability['rr_ratio'],
+            'profitability_pct': profitability['profitability_pct'],
+            'expected_value': profitability['expected_value'],
+            'exit_scenarios': profitability.get('exit_scenarios', {}),
+            'recommendation': profitability.get('recommendation', ''),
+            'timestamp': datetime.now()
+        }
+    
+    def _get_profitability_recommendation(self, exit_scenarios: Dict[str, Dict], strategy_type: str) -> str:
+        """
+        Gibt eine Empfehlung basierend auf den Ausstiegsszenarien.
+        
+        Args:
+            exit_scenarios: Die berechneten Ausstiegsszenarien
+            strategy_type: Typ der Strategie
+            
+        Returns:
+            String mit Empfehlung
+        """
+        worthless_result = exit_scenarios['expires_worthless']['net_result']
+        profit_exit_result = exit_scenarios['early_profit_exit']['net_result']
+        loss_exit_result = exit_scenarios['early_loss_exit']['net_result']
+        
+        # Für Short-Positionen ist wertlos verfallen das beste Szenario
+        if strategy_type in ['SHORT_PUT', 'BEAR_CALL_SPREAD']:
+            if worthless_result > 0:
+                return "Empfohlen: Option sollte wertlos verfallen"
+            elif profit_exit_result > 0:
+                return "Alternativ: Vorzeitiger Ausstieg bei 50% Gewinn"
+            else:
+                return "Vorsicht: Hohe Kosten - nur bei hoher Erfolgswahrscheinlichkeit"
+        
+        # Für Long-Positionen ist vorzeitiger Ausstieg besser als wertlos verfallen
+        else:
+            if profit_exit_result > 0:
+                return "Empfohlen: Vorzeitiger Ausstieg bei 50% Gewinn"
+            elif worthless_result > loss_exit_result:
+                return "Alternativ: Wertlos verfallen besser als Verlust-Ausstieg"
+            else:
+                return "Vorsicht: Hohe Kosten - nur bei starkem Bewegungsimpuls"
     
     # ========================================================================
     # TWS REQUEST FUNCTIONS
@@ -655,6 +1389,74 @@ class OptionsScanner(EWrapper, EClient):
             'option_type': option_type
         }
     
+    def find_short_put_strike(self, symbol: str, current_price: float) -> Optional[Dict]:
+        """
+        Findet passenden Strike für Short Put (Cash Secured Put).
+        
+        Wählt Strike 5-10% unter Current Price für gute Prämie
+        aber nicht zu weit weg für Risikomanagement
+        
+        Returns:
+            Dict mit strike, expiry, dte, premium
+        """
+        if symbol not in self.options_chain_cache:
+            logger.warning(f"[WARNUNG] {symbol}: Keine Options-Chain verfügbar")
+            return None
+        
+        chain = self.options_chain_cache[symbol]
+        expirations = chain['expirations']
+        strikes = chain['strikes']
+        
+        # Filtere Expirations nach DTE (30-60 Tage für Short Put)
+        min_dte = 30
+        max_dte = 60
+        
+        today = datetime.now()
+        suitable_expirations = []
+        
+        for exp_str in expirations:
+            try:
+                exp_date = datetime.strptime(exp_str, '%Y%m%d')
+                dte = (exp_date - today).days
+                
+                if min_dte <= dte <= max_dte:
+                    suitable_expirations.append((exp_str, dte))
+            except:
+                continue
+        
+        if not suitable_expirations:
+            logger.warning(f"[WARNUNG] {symbol}: Keine Expirations im DTE-Bereich {min_dte}-{max_dte}")
+            return None
+        
+        # Wähle Expiration in der Mitte
+        suitable_expirations.sort(key=lambda x: abs(x[1] - 45))  # Ziel 45 Tage
+        selected_expiry, selected_dte = suitable_expirations[0]
+        
+        # Finde Strike 5-8% unter Current Price
+        target_put_strike = current_price * 0.925  # 7.5% OTM für gute Prämie
+        
+        # Finde verfügbare Strikes unter Current Price
+        put_strikes = [s for s in strikes if s < current_price]
+        
+        if not put_strikes:
+            logger.warning(f"[WARNUNG] {symbol}: Keine Put Strikes verfügbar")
+            return None
+        
+        # Wähle Strike nahe Target
+        selected_strike = min(put_strikes, key=lambda x: abs(x - target_put_strike))
+        
+        # Schätze Premium (vereinfacht - in Realität von TWS)
+        # Approximation: ATM Put ~ 3-5% des Strikes bei 45 Tagen
+        distance_pct = (current_price - selected_strike) / current_price
+        estimated_premium = selected_strike * (0.03 + distance_pct * 0.02)  # 3-5% je nach Distance
+        
+        return {
+            'strike': selected_strike,
+            'expiry': selected_expiry,
+            'dte': selected_dte,
+            'premium': estimated_premium
+        }
+    
     # ========================================================================
     # SIGNAL-ERKENNUNG
     # ========================================================================
@@ -667,6 +1469,14 @@ class OptionsScanner(EWrapper, EClient):
             Signal-Dict oder None
         """
         if len(df) == 0:
+            return None
+        
+        # Stelle sicher, dass Earnings-Daten verfügbar sind (lazy loading)
+        self._ensure_earnings_data(symbol)
+        
+        # Earnings-Risiko-Prüfung: Blockiere Signale während Earnings-Periode
+        if self._is_earnings_risk_period(symbol):
+            logger.info(f"[INFO] {symbol}: Long Put Signal blockiert - Earnings-Periode")
             return None
         
         current_price = df.iloc[-1]['close']
@@ -751,6 +1561,19 @@ class OptionsScanner(EWrapper, EClient):
             return None
         
         # Alle Kriterien erfüllt!
+        # Schätze max_profit für Long Put (Strike - Current Price, begrenzt auf 50%)
+        estimated_max_profit = max(0, option_candidate['strike'] - current_price) * 0.5  # Konservative Schätzung
+        max_risk = option_candidate['strike'] - current_price  # Premium bezahlt
+        
+        # Kostenberechnung
+        costs = self.calculate_strategy_costs('LONG_PUT', 1, option_candidate['strike'] - current_price)
+        profitability = self.calculate_strategy_profitability('LONG_PUT', {
+            'max_profit': estimated_max_profit,
+            'max_risk': max_risk,
+            'net_premium': option_candidate['strike'] - current_price,
+            'quantity': 1
+        })
+        
         return {
             'type': 'LONG_PUT',
             'symbol': symbol,
@@ -765,6 +1588,15 @@ class OptionsScanner(EWrapper, EClient):
             'recommended_strike': option_candidate['strike'],
             'recommended_expiry': option_candidate['expiry'],
             'recommended_dte': option_candidate['dte'],
+            # Kosten & Rentabilität
+            'estimated_max_profit': estimated_max_profit,
+            'max_risk': max_risk,
+            'commission': costs['commission'],
+            'total_cost': costs['total_cost'],
+            'adjusted_max_profit': profitability['adjusted_max_profit'],
+            'rr_ratio': profitability['rr_ratio'],
+            'profitability_pct': profitability['profitability_pct'],
+            'expected_value': profitability['expected_value'],
             'timestamp': datetime.now()
         }
     
@@ -798,6 +1630,14 @@ class OptionsScanner(EWrapper, EClient):
             Signal-Dict oder None
         """
         if len(df) == 0:
+            return None
+        
+        # Stelle sicher, dass Earnings-Daten verfügbar sind (lazy loading)
+        self._ensure_earnings_data(symbol)
+        
+        # Earnings-Risiko-Prüfung: Blockiere Signale während Earnings-Periode
+        if self._is_earnings_risk_period(symbol):
+            logger.info(f"[INFO] {symbol}: Long Call Signal blockiert - Earnings-Periode")
             return None
         
         current_price = df.iloc[-1]['close']
@@ -873,6 +1713,19 @@ class OptionsScanner(EWrapper, EClient):
             return None
         
         # Alle Kriterien erfüllt!
+        # Schätze max_profit für Long Call (begrenzt auf 50% Aufwärtspotenzial)
+        estimated_max_profit = (option_candidate['strike'] - current_price) * 0.5  # Konservative Schätzung
+        max_risk = current_price - option_candidate['strike']  # Premium bezahlt (negativ)
+        
+        # Kostenberechnung
+        costs = self.calculate_strategy_costs('LONG_CALL', 1, current_price - option_candidate['strike'])
+        profitability = self.calculate_strategy_profitability('LONG_CALL', {
+            'max_profit': estimated_max_profit,
+            'max_risk': abs(max_risk),
+            'net_premium': current_price - option_candidate['strike'],
+            'quantity': 1
+        })
+        
         return {
             'type': 'LONG_CALL',
             'symbol': symbol,
@@ -886,6 +1739,156 @@ class OptionsScanner(EWrapper, EClient):
             'recommended_strike': option_candidate['strike'],
             'recommended_expiry': option_candidate['expiry'],
             'recommended_dte': option_candidate['dte'],
+            # Kosten & Rentabilität
+            'estimated_max_profit': estimated_max_profit,
+            'max_risk': max_risk,
+            'commission': costs['commission'],
+            'total_cost': costs['total_cost'],
+            'adjusted_max_profit': profitability['adjusted_max_profit'],
+            'rr_ratio': profitability['rr_ratio'],
+            'profitability_pct': profitability['profitability_pct'],
+            'expected_value': profitability['expected_value'],
+            'timestamp': datetime.now()
+        }
+    
+    def check_short_put_setup(self, symbol: str, df: pd.DataFrame) -> Optional[Dict]:
+        """
+        Prüft Short Put Setup (Cash Secured Put am 52W-Tief).
+        
+        Strategie: Verkaufe Put nahe 52W-Tief bei starker Fundamentaldaten
+        Erwartung: Aktie fällt nicht weiter, Prämie kassieren
+        
+        Returns:
+            Signal-Dict oder None
+        """
+        if len(df) == 0:
+            return None
+        
+        # Stelle sicher, dass Earnings-Daten verfügbar sind (lazy loading)
+        self._ensure_earnings_data(symbol)
+        
+        # Earnings-Risiko-Prüfung: Blockiere Signale während Earnings-Periode
+        if self._is_earnings_risk_period(symbol):
+            logger.info(f"[INFO] {symbol}: Short Put Signal blockiert - Earnings-Periode")
+            return None
+        
+        current_price = df.iloc[-1]['close']
+        high_52w, low_52w = self.calculate_52w_extremes(df)
+        
+        # 1. Technischer Trigger: Nahe 52W-Tief (konträre Erwartung)
+        proximity_threshold = low_52w * (1 + opt_config.CALL_PROXIMITY_TO_LOW_PCT)
+        if current_price > proximity_threshold:
+            return None
+        
+        # 2. Fundamentale Prüfung: Sehr starke Fundamentaldaten
+        if symbol not in self.fundamental_data_cache:
+            logger.warning(f"[WARNUNG] {symbol}: Keine Fundamentaldaten")
+            return None
+        
+        fundamentals = self.fundamental_data_cache[symbol]
+        pe_ratio = fundamentals.get('pe_ratio')
+        fcf = fundamentals.get('fcf', 0)
+        market_cap = fundamentals.get('market_cap')
+        avg_volume = fundamentals.get('avg_volume')
+        
+        # Filter: Marktkapitalisierung und Volumen
+        if market_cap and market_cap < opt_config.MIN_MARKET_CAP:
+            return None
+        
+        if avg_volume and avg_volume < opt_config.MIN_AVG_VOLUME:
+            return None
+        
+        # Sehr starke Fundamentaldaten für Short Put
+        if not pe_ratio or pe_ratio > 15:  # Günstig bewertet
+            return None
+        
+        market_cap_val = market_cap or 1
+        fcf_yield = fcf / market_cap_val if market_cap_val > 0 else 0
+        
+        if fcf_yield < 0.08:  # Mindestens 8% FCF Yield
+            logger.debug(f"[DEBUG] {symbol}: FCF Yield {fcf_yield:.4f} < 0.08")
+            return None
+        
+        # 3. Finde passenden Strike für Short Put
+        option_candidate = self.find_short_put_strike(symbol, current_price)
+        
+        if not option_candidate:
+            return None
+        
+        # 4. IV Rank Prüfung (niedriger IV für stabile Aktien)
+        self.request_option_greeks(
+            symbol,
+            option_candidate['strike'],
+            'P',
+            option_candidate['expiry']
+        )
+        
+        self.wait_for_requests(timeout=10)
+        
+        # Hole IV
+        current_iv = None
+        for req_data in self.pending_requests.values():
+            if (req_data.get('symbol') == symbol and
+                req_data.get('strike') == option_candidate['strike']):
+                greeks = req_data.get('greeks', {})
+                current_iv = greeks.get('implied_volatility')
+                break
+        
+        if current_iv is None:
+            # Fallback
+            if symbol in self.historical_data_cache:
+                df_temp = self.historical_data_cache[symbol]
+                returns = np.log(df_temp['close'] / df_temp['close'].shift(1))
+                current_iv = returns.std() * np.sqrt(252) * 100
+        
+        if current_iv:
+            iv_rank = self.calculate_iv_rank(symbol, current_iv)
+        else:
+            iv_rank = 30.0  # Konservativ niedrig
+        
+        if iv_rank > 40:  # Max 40% IV Rank für Short Put
+            logger.debug(f"[DEBUG] {symbol}: IV Rank {iv_rank:.1f} > 40")
+            return None
+        
+        # Alle Kriterien erfüllt!
+        # Short Put: Max Profit = Prämie, Max Risk = Strike - Prämie
+        premium = option_candidate['premium']
+        max_profit = premium
+        max_risk = option_candidate['strike'] - current_price - premium  # Unbegrenzt, aber konservativ
+        
+        # Kostenberechnung
+        costs = self.calculate_strategy_costs('SHORT_PUT', 1, premium)
+        profitability = self.calculate_strategy_profitability('SHORT_PUT', {
+            'max_profit': max_profit,
+            'max_risk': max_risk,
+            'net_premium': premium,
+            'quantity': 1
+        })
+        
+        return {
+            'type': 'SHORT_PUT',
+            'symbol': symbol,
+            'underlying_price': current_price,
+            'low_52w': low_52w,
+            'proximity_pct': ((current_price / low_52w) - 1) * 100,
+            'pe_ratio': pe_ratio,
+            'fcf_yield': fcf_yield,
+            'market_cap': market_cap,
+            'avg_volume': avg_volume,
+            'iv_rank': iv_rank,
+            'recommended_strike': option_candidate['strike'],
+            'recommended_expiry': option_candidate['expiry'],
+            'recommended_dte': option_candidate['dte'],
+            'premium': premium,
+            'max_profit': max_profit,
+            'max_risk': max_risk,
+            # Kosten & Rentabilität
+            'commission': costs['commission'],
+            'total_cost': costs['total_cost'],
+            'adjusted_max_profit': profitability['adjusted_max_profit'],
+            'rr_ratio': profitability['rr_ratio'],
+            'profitability_pct': profitability['profitability_pct'],
+            'expected_value': profitability['expected_value'],
             'timestamp': datetime.now()
         }
     
@@ -897,6 +1900,14 @@ class OptionsScanner(EWrapper, EClient):
             Signal-Dict oder None
         """
         if len(df) == 0:
+            return None
+        
+        # Stelle sicher, dass Earnings-Daten verfügbar sind (lazy loading)
+        self._ensure_earnings_data(symbol)
+        
+        # Earnings-Risiko-Prüfung: Blockiere Signale während Earnings-Periode
+        if self._is_earnings_risk_period(symbol):
+            logger.info(f"[INFO] {symbol}: Bear Call Spread Signal blockiert - Earnings-Periode")
             return None
         
         current_price = df.iloc[-1]['close']
@@ -978,6 +1989,15 @@ class OptionsScanner(EWrapper, EClient):
             return None
         
         # Alle Kriterien erfüllt!
+        # Kostenberechnung
+        costs = self.calculate_strategy_costs('BEAR_CALL_SPREAD', 1, spread_candidate['net_premium'])
+        profitability = self.calculate_strategy_profitability('BEAR_CALL_SPREAD', {
+            'max_profit': spread_candidate['net_premium'],
+            'max_risk': spread_candidate['max_risk'],
+            'net_premium': spread_candidate['net_premium'],
+            'quantity': 1
+        })
+        
         return {
             'type': 'BEAR_CALL_SPREAD',
             'symbol': symbol,
@@ -996,10 +2016,164 @@ class OptionsScanner(EWrapper, EClient):
             'max_risk': spread_candidate['max_risk'],
             'recommended_expiry': spread_candidate['expiry'],
             'recommended_dte': spread_candidate['dte'],
+            # Kosten & Rentabilität
+            'commission': costs['commission'],
+            'total_cost': costs['total_cost'],
+            'adjusted_net_premium': profitability['adjusted_net_premium'],
+            'rr_ratio': profitability['rr_ratio'],
+            'profitability_pct': profitability['profitability_pct'],
+            'expected_value': profitability['expected_value'],
             'timestamp': datetime.now()
         }
     
-    def find_spread_strikes(self, symbol: str, current_price: float) -> Optional[Dict]:
+    def check_bull_put_spread_setup(self, symbol: str, df: pd.DataFrame) -> Optional[Dict]:
+        """
+        Prüft Bull Put Spread Setup (Short am 52W-Tief mit Protection).
+        
+        Bull Put Spread = Short Put + Long Put (höherer Strike)
+        - Short Put: Höherer Strike (bullish, weniger wahrscheinlich)
+        - Long Put: Tieferer Strike (Protection)
+        - Max Profit: Net Premium
+        - Max Risk: Strike-Differenz - Net Premium
+        
+        Returns:
+            Signal-Dict oder None
+        """
+        if len(df) == 0:
+            return None
+        
+        # Stelle sicher, dass Earnings-Daten verfügbar sind (lazy loading)
+        self._ensure_earnings_data(symbol)
+        
+        # Earnings-Risiko-Prüfung: Blockiere Signale während Earnings-Periode
+        if self._is_earnings_risk_period(symbol):
+            logger.info(f"[INFO] {symbol}: Bull Put Spread Signal blockiert - Earnings-Periode")
+            return None
+        
+        current_price = df.iloc[-1]['close']
+        high_52w, low_52w = self.calculate_52w_extremes(df)
+        
+        # 1. Technischer Trigger: Nahe 52W-Tief (wie Long Call)
+        proximity_threshold = low_52w * (1 + opt_config.SPREAD_PROXIMITY_TO_LOW_PCT)
+        if current_price > proximity_threshold:
+            return None
+        
+        # 2. Fundamentale Prüfung: Unterbewertung
+        if symbol not in self.fundamental_data_cache:
+            logger.warning(f"[WARNUNG] {symbol}: Keine Fundamentaldaten")
+            return None
+        
+        fundamentals = self.fundamental_data_cache[symbol]
+        pe_ratio = fundamentals.get('pe_ratio')
+        sector = fundamentals.get('sector', 'Unknown')
+        market_cap = fundamentals.get('market_cap')
+        avg_volume = fundamentals.get('avg_volume')
+        fcf_yield = fundamentals.get('fcf_yield', 0)
+        
+        # Filter: Marktkapitalisierung und Volumen
+        if market_cap and market_cap < opt_config.MIN_MARKET_CAP:
+            return None
+        
+        if avg_volume and avg_volume < opt_config.MIN_AVG_VOLUME:
+            return None
+        
+        if not pe_ratio or pe_ratio <= 0:
+            return None
+        
+        sector_pe_median = self._get_sector_median_pe(sector)
+        pe_threshold = sector_pe_median * opt_config.SPREAD_PE_RATIO_MULTIPLIER_LOW
+        
+        if pe_ratio > pe_threshold:
+            logger.debug(f"[DEBUG] {symbol}: P/E {pe_ratio:.1f} > {pe_threshold:.1f}")
+            return None
+        
+        # FCF Yield Check (für Bull Put Spread: hoher FCF Yield bevorzugt)
+        if fcf_yield < opt_config.SPREAD_MIN_FCF_YIELD:
+            logger.debug(f"[DEBUG] {symbol}: FCF Yield {fcf_yield:.4f} < {opt_config.SPREAD_MIN_FCF_YIELD}")
+            return None
+        
+        # 3. Finde passende Spread-Strikes
+        spread_candidate = self.find_bull_put_spread_strikes(symbol, current_price)
+        
+        if not spread_candidate:
+            return None
+        
+        # 4. IV Rank Prüfung (hohes IV für Prämieneinnahme)
+        # Request Greeks für Short Strike
+        self.request_option_greeks(
+            symbol,
+            spread_candidate['short_strike'],
+            'P',
+            spread_candidate['expiry']
+        )
+        
+        self.wait_for_requests(timeout=10)
+        
+        # Hole IV
+        current_iv = None
+        for req_data in self.pending_requests.values():
+            if (req_data.get('symbol') == symbol and
+                req_data.get('strike') == spread_candidate['short_strike']):
+                greeks = req_data.get('greeks', {})
+                current_iv = greeks.get('implied_volatility')
+                break
+        
+        if current_iv is None:
+            # Fallback
+            if symbol in self.historical_data_cache:
+                df_temp = self.historical_data_cache[symbol]
+                returns = np.log(df_temp['close'] / df_temp['close'].shift(1))
+                current_iv = returns.std() * np.sqrt(252) * 100
+        
+        if current_iv:
+            iv_rank = self.calculate_iv_rank(symbol, current_iv)
+        else:
+            iv_rank = 50.0
+        
+        if iv_rank < opt_config.SPREAD_MIN_IV_RANK:
+            logger.debug(f"[DEBUG] {symbol}: IV Rank {iv_rank:.1f} < {opt_config.SPREAD_MIN_IV_RANK}")
+            return None
+        
+        # Alle Kriterien erfüllt!
+        # Kostenberechnung
+        costs = self.calculate_strategy_costs('BULL_PUT_SPREAD', 1, spread_candidate['net_premium'])
+        profitability = self.calculate_strategy_profitability('BULL_PUT_SPREAD', {
+            'max_profit': spread_candidate['net_premium'],
+            'max_risk': spread_candidate['max_risk'],
+            'net_premium': spread_candidate['net_premium'],
+            'quantity': 1
+        })
+        
+        return {
+            'type': 'BULL_PUT_SPREAD',
+            'symbol': symbol,
+            'underlying_price': current_price,
+            'low_52w': low_52w,
+            'proximity_pct': ((current_price / low_52w) - 1) * 100,
+            'pe_ratio': pe_ratio,
+            'sector_pe': sector_pe_median,
+            'fcf_yield': fcf_yield,
+            'market_cap': market_cap,
+            'avg_volume': avg_volume,
+            'iv_rank': iv_rank,
+            'short_strike': spread_candidate['short_strike'],
+            'long_strike': spread_candidate['long_strike'],
+            'short_delta': spread_candidate['short_delta'],
+            'net_premium': spread_candidate['net_premium'],
+            'max_risk': spread_candidate['max_risk'],
+            'recommended_expiry': spread_candidate['expiry'],
+            'recommended_dte': spread_candidate['dte'],
+            # Kosten & Rentabilität
+            'commission': costs['commission'],
+            'total_cost': costs['total_cost'],
+            'adjusted_net_premium': profitability['adjusted_net_premium'],
+            'rr_ratio': profitability['rr_ratio'],
+            'profitability_pct': profitability['profitability_pct'],
+            'expected_value': profitability['expected_value'],
+            'exit_scenarios': profitability.get('exit_scenarios', {}),
+            'recommendation': profitability.get('recommendation', ''),
+            'timestamp': datetime.now()
+        }
         """
         Findet passende Strikes für Bear Call Spread.
         
@@ -1085,9 +2259,253 @@ class OptionsScanner(EWrapper, EClient):
             'max_risk': max_risk
         }
     
-    # ========================================================================
-    # HAUPTFUNKTION
-    # ========================================================================
+    def find_bull_put_spread_strikes(self, symbol: str, current_price: float) -> Optional[Dict]:
+        """
+        Findet passende Strikes für Bull Put Spread.
+        
+        Short Put: Delta 0.25-0.35 (bullish, weniger wahrscheinlich)
+        Long Put: $5 unter Short Strike
+        
+        Returns:
+            Dict mit short_strike, long_strike, expiry, dte, net_premium, max_risk
+        """
+        if symbol not in self.options_chain_cache:
+            logger.warning(f"[WARNUNG] {symbol}: Keine Options-Chain verfügbar")
+            return None
+        
+        chain = self.options_chain_cache[symbol]
+        expirations = chain['expirations']
+        strikes = chain['strikes']
+        
+        # Filtere Expirations nach DTE (30-45 Tage)
+        min_dte = opt_config.SPREAD_MIN_DTE
+        max_dte = opt_config.SPREAD_MAX_DTE
+        
+        today = datetime.now()
+        suitable_expirations = []
+        
+        for exp_str in expirations:
+            try:
+                exp_date = datetime.strptime(exp_str, '%Y%m%d')
+                dte = (exp_date - today).days
+                
+                if min_dte <= dte <= max_dte:
+                    suitable_expirations.append((exp_str, dte))
+            except:
+                continue
+        
+        if not suitable_expirations:
+            logger.warning(f"[WARNUNG] {symbol}: Keine Expirations im DTE-Bereich {min_dte}-{max_dte}")
+            return None
+        
+        # Wähle Expiration in der Mitte
+        suitable_expirations.sort(key=lambda x: abs(x[1] - (min_dte + max_dte) / 2))
+        selected_expiry, selected_dte = suitable_expirations[0]
+        
+        # Finde Short Strike mit Delta 0.25-0.35
+        # Für Put: Strike leicht über Current Price (bullish, weniger wahrscheinlich)
+        target_short_strike = current_price * 1.05  # 5% OTM als Start
+        
+        otm_strikes = [s for s in strikes if s >= current_price * 1.02]  # Mind. 2% OTM
+        
+        if not otm_strikes:
+            logger.warning(f"[WARNUNG] {symbol}: Keine OTM Put Strikes gefunden")
+            return None
+        
+        # Wähle Strike nahe Target
+        short_strike = min(otm_strikes, key=lambda x: abs(x - target_short_strike))
+        
+        # Long Strike: $5 unter Short Strike
+        long_strike = short_strike - opt_config.SPREAD_STRIKE_WIDTH
+        
+        # Prüfe ob Long Strike verfügbar
+        if long_strike not in strikes:
+            # Finde nächsten verfügbaren Strike unter Short
+            lower_strikes = [s for s in strikes if s < short_strike]
+            if not lower_strikes:
+                return None
+            long_strike = max(lower_strikes)
+        
+        # Berechne Max Risk
+        strike_diff = short_strike - long_strike
+        max_risk = (strike_diff * 100) - (0.25 * strike_diff * 100)  # Strike-Diff minus Net Premium
+        
+        # Geschätzte Net Premium (würde in Realität von TWS kommen)
+        # Konservative Schätzung: 20-30% der Strike-Differenz bei Delta 0.30
+        estimated_net_premium = max_risk * 0.25  # 25% der Max Risk
+        
+        return {
+            'short_strike': short_strike,
+            'long_strike': long_strike,
+            'expiry': selected_expiry,
+            'dte': selected_dte,
+            'short_delta': 0.30,  # Approximation
+            'net_premium': estimated_net_premium,
+            'max_risk': max_risk
+        }
+    
+    def find_covered_call_strike(self, symbol: str, current_price: float, position: Dict) -> Optional[Dict]:
+        """
+        Findet passenden Call Strike für Covered Call.
+        
+        Strike sollte: 
+        - Über aktuellem Preis liegen (OTM)
+        - Nicht zu weit über dem aktuellen Preis
+        - Hohe Prämie bieten
+        
+        Returns:
+            Dict mit strike, expiry, dte, premium, delta
+        """
+        if symbol not in self.options_chain_cache:
+            logger.warning(f"[WARNUNG] {symbol}: Keine Options-Chain verfügbar")
+            return None
+        
+        chain = self.options_chain_cache[symbol]
+        expirations = chain['expirations']
+        strikes = chain['strikes']
+        
+        # Filtere Expirations nach DTE (30-60 Tage für Covered Calls)
+        min_dte = opt_config.COVERED_CALL_MIN_DTE
+        max_dte = opt_config.COVERED_CALL_MAX_DTE
+        
+        today = datetime.now()
+        suitable_expirations = []
+        
+        for exp_str in expirations:
+            try:
+                exp_date = datetime.strptime(exp_str, '%Y%m%d')
+                dte = (exp_date - today).days
+                
+                if min_dte <= dte <= max_dte:
+                    suitable_expirations.append((exp_str, dte))
+            except:
+                continue
+        
+        if not suitable_expirations:
+            logger.warning(f"[WARNUNG] {symbol}: Keine Expirations im DTE-Bereich {min_dte}-{max_dte}")
+            return None
+        
+        # Wähle Expiration in der Mitte
+        suitable_expirations.sort(key=lambda x: abs(x[1] - (min_dte + max_dte) / 2))
+        selected_expiry, selected_dte = suitable_expirations[0]
+        
+        # Finde OTM Call Strikes (5-15% über aktuellem Preis)
+        min_strike = current_price * 1.05  # Mindestens 5% OTM
+        max_strike = current_price * 1.15  # Maximal 15% OTM
+        
+        otm_strikes = [s for s in strikes if min_strike <= s <= max_strike]
+        
+        if not otm_strikes:
+            logger.warning(f"[WARNUNG] {symbol}: Keine geeigneten OTM Call Strikes gefunden")
+            return None
+        
+        # Wähle Strike mit bester Prämien-Rendite
+        # Approximation: Höhere Strikes haben tendenziell höhere Prämien
+        # Wähle Strike bei 8-10% OTM als gute Balance
+        target_strike = current_price * 1.08
+        selected_strike = min(otm_strikes, key=lambda x: abs(x - target_strike))
+        
+        # Geschätzte Premium (würde in Realität von TWS kommen)
+        # Approximation basierend auf DTE und Entfernung zum Strike
+        distance_pct = (selected_strike - current_price) / current_price
+        base_premium = current_price * 0.02  # 2% Basisprämie
+        
+        # Höhere Prämie für längere Laufzeit und größeren Abstand
+        time_factor = selected_dte / 45  # Normalisiert auf 45 Tage
+        distance_factor = distance_pct * 5  # 5x Multiplikator für Entfernung
+        
+        estimated_premium = base_premium * (1 + time_factor) * (1 + distance_factor)
+        
+        return {
+            'strike': selected_strike,
+            'expiry': selected_expiry,
+            'dte': selected_dte,
+            'premium': estimated_premium,
+            'delta': 0.25  # Approximation für OTM Call
+        }
+    
+    def check_covered_call_exit_signals(self, symbol: str, df: pd.DataFrame) -> Optional[Dict]:
+        """
+        Prüft Exit-Signale für bestehende Covered Call Positionen.
+        
+        Exit-Signale wenn:
+        1. Option läuft stark ins Geld (Aktienkurs > Strike + Buffer)
+        2. Hoher unrealisierter Verlust auf der Aktienposition
+        3. Wenige Tage bis Verfall
+        
+        Returns:
+            Exit-Signal oder None
+        """
+        if len(df) == 0 or symbol not in self.portfolio_data:
+            return None
+        
+        current_price = df.iloc[-1]['close']
+        position = self.portfolio_data[symbol]
+        
+        # Prüfe ob es offene Covered Call Positionen gibt
+        # (vereinfacht: wenn Aktien gehalten werden, könnte es Covered Calls geben)
+        if position.get('quantity', 0) < 100:
+            return None
+        
+        # 1. Option läuft ins Geld - Aktienkurs nahe/am Strike
+        # Hole aktive Covered Call Positionen aus der Datenbank
+        active_covered_calls = self.db.get_active_covered_calls(symbol)
+        
+        for covered_call in active_covered_calls:
+            strike = covered_call.get('strike')
+            expiry = covered_call.get('expiry')
+            entry_premium = covered_call.get('premium', 0)
+            
+            # Berechne Tage bis Verfall
+            try:
+                expiry_date = datetime.strptime(expiry, '%Y%m%d')
+                dte = (expiry_date - datetime.now()).days
+            except:
+                continue
+            
+            # Exit Signal 1: Option läuft stark ins Geld
+            if current_price >= strike * 1.02:  # 2% über Strike
+                return {
+                    'type': 'COVERED_CALL_EXIT',
+                    'symbol': symbol,
+                    'reason': 'OPTION_IN_THE_MONEY',
+                    'current_price': current_price,
+                    'strike': strike,
+                    'dte': dte,
+                    'entry_premium': entry_premium,
+                    'unrealized_pnl': position.get('unrealized_pnl', 0),
+                    'message': f'Covered Call @ {strike} läuft ins Geld - Aktie bei ${current_price:.2f}'
+                }
+            
+            # Exit Signal 2: Wenige Tage bis Verfall (< 7 Tage)
+            if dte <= 7:
+                return {
+                    'type': 'COVERED_CALL_EXIT',
+                    'symbol': symbol,
+                    'reason': 'EXPIRING_SOON',
+                    'current_price': current_price,
+                    'strike': strike,
+                    'dte': dte,
+                    'entry_premium': entry_premium,
+                    'unrealized_pnl': position.get('unrealized_pnl', 0),
+                    'message': f'Covered Call @ {strike} verfällt in {dte} Tagen'
+                }
+            
+            # Exit Signal 3: Hoher unrealisierter Verlust auf Aktienposition
+            if position.get('unrealized_pnl', 0) < -1000:  # >$1000 Verlust
+                return {
+                    'type': 'COVERED_CALL_EXIT',
+                    'symbol': symbol,
+                    'reason': 'LARGE_UNREALIZED_LOSS',
+                    'current_price': current_price,
+                    'strike': strike,
+                    'dte': dte,
+                    'entry_premium': entry_premium,
+                    'unrealized_pnl': position.get('unrealized_pnl', 0),
+                    'message': f'Covered Call @ {strike} - Aktienposition mit ${position["unrealized_pnl"]:.2f} Verlust'
+                }
+        
+        return None
     
     def scan_for_options_signals(self):
         """Scannt Watchlist nach Options-Signalen."""
@@ -1142,6 +2560,9 @@ class OptionsScanner(EWrapper, EClient):
                     logger.info(f"  IV Rank: {put_signal['iv_rank']:.1f}")
                     logger.info(f"  Option: {put_signal['recommended_strike']} PUT {put_signal['recommended_expiry']}")
                     logger.info(f"  DTE: {put_signal['recommended_dte']}")
+                    logger.info(f"  Max Risk: ${put_signal['max_risk']:.2f}")
+                    logger.info(f"  Kommission: €{put_signal['commission']:.2f}")
+                    logger.info(f"  R/R Ratio: {put_signal['rr_ratio']:.2f}")
                     logger.info(f"{'='*70}")
                     
                     # Speichere Signal
@@ -1152,7 +2573,9 @@ class OptionsScanner(EWrapper, EClient):
                         title=f"[LONG PUT] {symbol}",
                         message=f"52W-Hoch Setup @ ${put_signal['underlying_price']:.2f}\\n" +
                                f"Strike: {put_signal['recommended_strike']} DTE: {put_signal['recommended_dte']}\\n" +
-                               f"P/E: {put_signal['pe_ratio']:.1f} | IV Rank: {put_signal['iv_rank']:.1f}",
+                               f"P/E: {put_signal['pe_ratio']:.1f} | IV Rank: {put_signal['iv_rank']:.1f}\\n" +
+                               f"Max Risk: ${put_signal['max_risk']:.2f} | Kommission: €{put_signal['commission']:.2f}\\n" +
+                               f"💰 {put_signal['recommendation']}",
                         priority=1
                     )
                 
@@ -1167,6 +2590,9 @@ class OptionsScanner(EWrapper, EClient):
                     logger.info(f"  IV Rank: {call_signal['iv_rank']:.1f}")
                     logger.info(f"  Option: {call_signal['recommended_strike']} CALL {call_signal['recommended_expiry']}")
                     logger.info(f"  DTE: {call_signal['recommended_dte']}")
+                    logger.info(f"  Max Risk: ${abs(call_signal['max_risk']):.2f}")
+                    logger.info(f"  Kommission: €{call_signal['commission']:.2f}")
+                    logger.info(f"  R/R Ratio: {call_signal['rr_ratio']:.2f}")
                     logger.info(f"{'='*70}")
                     
                     # Speichere Signal
@@ -1177,7 +2603,76 @@ class OptionsScanner(EWrapper, EClient):
                         title=f"[LONG CALL] {symbol}",
                         message=f"52W-Tief Setup @ ${call_signal['underlying_price']:.2f}\\n" +
                                f"Strike: {call_signal['recommended_strike']} DTE: {call_signal['recommended_dte']}\\n" +
-                               f"FCF Yield: {call_signal['fcf_yield']:.4f} | IV Rank: {call_signal['iv_rank']:.1f}",
+                               f"FCF Yield: {call_signal['fcf_yield']:.4f} | IV Rank: {call_signal['iv_rank']:.1f}\\n" +
+                               f"Max Risk: ${abs(call_signal['max_risk']):.2f} | Kommission: €{call_signal['commission']:.2f}\\n" +
+                               f"💰 {call_signal['recommendation']}",
+                        priority=1
+                    )
+                
+                # Short Put Setup (Cash Secured Put am 52W-Tief)
+                short_put_signal = self.check_short_put_setup(symbol, df)
+                if short_put_signal:
+                    logger.info(f"\n{'='*70}")
+                    logger.info(f"[SIGNAL] SHORT PUT SETUP: {symbol}")
+                    logger.info(f"  Preis: ${short_put_signal['underlying_price']:.2f}")
+                    logger.info(f"  52W-Tief: ${short_put_signal['low_52w']:.2f} ({short_put_signal['proximity_pct']:+.2f}%)")
+                    logger.info(f"  P/E Ratio: {short_put_signal['pe_ratio']:.1f}")
+                    logger.info(f"  FCF Yield: {short_put_signal['fcf_yield']:.4f}")
+                    logger.info(f"  IV Rank: {short_put_signal['iv_rank']:.1f}")
+                    logger.info(f"  Strike: {short_put_signal['recommended_strike']} PUT {short_put_signal['recommended_expiry']}")
+                    logger.info(f"  DTE: {short_put_signal['recommended_dte']}")
+                    logger.info(f"  Premium: ${short_put_signal['premium']:.2f} (bereinigt: ${short_put_signal['adjusted_max_profit']:.2f})")
+                    logger.info(f"  Max Risk: ${short_put_signal['max_risk']:.2f}")
+                    logger.info(f"  Kommission: €{short_put_signal['commission']:.2f}")
+                    logger.info(f"  R/R Ratio: {short_put_signal['rr_ratio']:.2f}")
+                    logger.info(f"{'='*70}")
+                    
+                    # Speichere Signal
+                    self.db.save_options_signal(short_put_signal)
+                    
+                    # Sende Benachrichtigung
+                    self.notifier.send_notification(
+                        title=f"[SHORT PUT] {symbol}",
+                        message=f"52W-Tief Setup @ ${short_put_signal['underlying_price']:.2f}\\n" +
+                               f"Strike: {short_put_signal['recommended_strike']} DTE: {short_put_signal['recommended_dte']}\\n" +
+                               f"P/E: {short_put_signal['pe_ratio']:.1f} | FCF Yield: {short_put_signal['fcf_yield']:.4f}\\n" +
+                               f"Premium: ${short_put_signal['premium']:.2f} | Kommission: €{short_put_signal['commission']:.2f}\\n" +
+                               f"Max Risk: ${short_put_signal['max_risk']:.2f} | R/R: {short_put_signal['rr_ratio']:.2f}\\n" +
+                               f"💰 {short_put_signal['recommendation']}",
+                        priority=1
+                    )
+                
+                # Bull Put Spread Setup (Short am 52W-Tief mit Protection)
+                bull_put_spread_signal = self.check_bull_put_spread_setup(symbol, df)
+                if bull_put_spread_signal:
+                    logger.info(f"\n{'='*70}")
+                    logger.info(f"[SIGNAL] BULL PUT SPREAD SETUP: {symbol}")
+                    logger.info(f"  Preis: ${bull_put_spread_signal['underlying_price']:.2f}")
+                    logger.info(f"  52W-Tief: ${bull_put_spread_signal['low_52w']:.2f} ({bull_put_spread_signal['proximity_pct']:+.2f}%)")
+                    logger.info(f"  P/E Ratio: {bull_put_spread_signal['pe_ratio']:.1f} (Branche: {bull_put_spread_signal['sector_pe']:.1f})")
+                    logger.info(f"  FCF Yield: {bull_put_spread_signal['fcf_yield']:.4f}")
+                    logger.info(f"  IV Rank: {bull_put_spread_signal['iv_rank']:.1f}")
+                    logger.info(f"  Short Put: {bull_put_spread_signal['short_strike']} (Delta ~{bull_put_spread_signal['short_delta']:.2f})")
+                    logger.info(f"  Long Put: {bull_put_spread_signal['long_strike']}")
+                    logger.info(f"  DTE: {bull_put_spread_signal['recommended_dte']}")
+                    logger.info(f"  Net Premium: ${bull_put_spread_signal['net_premium']:.2f} (bereinigt: ${bull_put_spread_signal['adjusted_net_premium']:.2f})")
+                    logger.info(f"  Max Risk: ${bull_put_spread_signal['max_risk']:.2f}")
+                    logger.info(f"  Kommission: €{bull_put_spread_signal['commission']:.2f}")
+                    logger.info(f"  R/R Ratio: {bull_put_spread_signal['rr_ratio']:.2f}")
+                    logger.info(f"{'='*70}")
+                    
+                    # Speichere Signal
+                    self.db.save_options_signal(bull_put_spread_signal)
+                    
+                    # Sende Benachrichtigung
+                    self.notifier.send_notification(
+                        title=f"[BULL PUT SPREAD] {symbol}",
+                        message=f"52W-Tief Setup @ ${bull_put_spread_signal['underlying_price']:.2f}\\n" +
+                               f"Spread: {bull_put_spread_signal['short_strike']}/{bull_put_spread_signal['long_strike']} DTE: {bull_put_spread_signal['recommended_dte']}\\n" +
+                               f"P/E: {bull_put_spread_signal['pe_ratio']:.1f} | FCF Yield: {bull_put_spread_signal['fcf_yield']:.4f}\\n" +
+                               f"Net Premium: ${bull_put_spread_signal['net_premium']:.2f} (€{bull_put_spread_signal['commission']:.2f} Kommission)\\n" +
+                               f"Max Risk: ${bull_put_spread_signal['max_risk']:.2f} | R/R: {bull_put_spread_signal['rr_ratio']:.2f}\\n" +
+                               f"💰 {bull_put_spread_signal['recommendation']}",
                         priority=1
                     )
                 
@@ -1193,8 +2688,10 @@ class OptionsScanner(EWrapper, EClient):
                     logger.info(f"  Short Call: {spread_signal['short_strike']} (Delta ~{spread_signal['short_delta']:.2f})")
                     logger.info(f"  Long Call: {spread_signal['long_strike']}")
                     logger.info(f"  DTE: {spread_signal['recommended_dte']}")
-                    logger.info(f"  Net Premium: ${spread_signal['net_premium']:.2f}")
+                    logger.info(f"  Net Premium: ${spread_signal['net_premium']:.2f} (bereinigt: ${spread_signal['adjusted_net_premium']:.2f})")
                     logger.info(f"  Max Risk: ${spread_signal['max_risk']:.2f}")
+                    logger.info(f"  Kommission: €{spread_signal['commission']:.2f}")
+                    logger.info(f"  R/R Ratio: {spread_signal['rr_ratio']:.2f}")
                     logger.info(f"{'='*70}")
                     
                     # Speichere Signal
@@ -1206,8 +2703,73 @@ class OptionsScanner(EWrapper, EClient):
                         message=f"52W-Hoch Setup @ ${spread_signal['underlying_price']:.2f}\\n" +
                                f"Spread: {spread_signal['short_strike']}/{spread_signal['long_strike']} DTE: {spread_signal['recommended_dte']}\\n" +
                                f"P/E: {spread_signal['pe_ratio']:.1f} | IV Rank: {spread_signal['iv_rank']:.1f}\\n" +
-                               f"Net Premium: ${spread_signal['net_premium']:.2f} | Max Risk: ${spread_signal['max_risk']:.2f}",
+                               f"Net Premium: ${spread_signal['net_premium']:.2f} (€{spread_signal['commission']:.2f} Kommission)\\n" +
+                               f"Max Risk: ${spread_signal['max_risk']:.2f} | R/R: {spread_signal['rr_ratio']:.2f}\\n" +
+                               f"💰 {spread_signal['recommendation']}",
                         priority=1
+                    )
+                
+                # Covered Call Setup (Verkauf von Calls auf eigene Aktien)
+                covered_call_signal = self.check_covered_call_setup(symbol, df)
+                if covered_call_signal:
+                    logger.info(f"\n{'='*70}")
+                    logger.info(f"[SIGNAL] COVERED CALL SETUP: {symbol}")
+                    logger.info(f"  Preis: ${covered_call_signal['underlying_price']:.2f}")
+                    logger.info(f"  52W-Hoch: ${covered_call_signal['high_52w']:.2f} ({covered_call_signal['proximity_pct']:+.2f}%)")
+                    logger.info(f"  Portfolio: {covered_call_signal['owned_quantity']} Aktien @ ${covered_call_signal['avg_cost']:.2f}")
+                    logger.info(f"  Unrealized P&L: ${covered_call_signal['unrealized_pnl']:.2f}")
+                    logger.info(f"  P/E Ratio: {covered_call_signal['pe_ratio']:.1f} (Branche: {covered_call_signal['sector_pe']:.1f})")
+                    logger.info(f"  IV Rank: {covered_call_signal['iv_rank']:.1f}")
+                    logger.info(f"  Call Strike: {covered_call_signal['call_strike']} (Delta ~{covered_call_signal['call_delta']:.2f})")
+                    logger.info(f"  Premium/Kontrakt: ${covered_call_signal['premium_per_contract']:.2f}")
+                    logger.info(f"  Max Kontrakte: {covered_call_signal['max_contracts']}")
+                    logger.info(f"  Max Profit/Kontrakt: ${covered_call_signal['max_profit_per_contract']:.2f}")
+                    logger.info(f"  Max Risk/Kontrakt: ${covered_call_signal['max_risk_per_contract']:.2f}")
+                    logger.info(f"  DTE: {covered_call_signal['recommended_dte']}")
+                    logger.info(f"  Kommission: €{covered_call_signal['commission']:.2f}")
+                    logger.info(f"  R/R Ratio: {covered_call_signal['rr_ratio']:.2f}")
+                    logger.info(f"{'='*70}")
+                    
+                    # Speichere Signal
+                    self.db.save_options_signal(covered_call_signal)
+                    
+                    # Sende Benachrichtigung
+                    self.notifier.send_notification(
+                        title=f"[COVERED CALL] {symbol}",
+                        message=f"Portfolio Position @ ${covered_call_signal['underlying_price']:.2f}\\n" +
+                               f"Strike: {covered_call_signal['call_strike']} DTE: {covered_call_signal['recommended_dte']}\\n" +
+                               f"Premium: ${covered_call_signal['premium_per_contract']:.2f} | Max Kontrakte: {covered_call_signal['max_contracts']}\\n" +
+                               f"Max Profit: ${covered_call_signal['max_profit_per_contract']:.2f} | Risk: ${covered_call_signal['max_risk_per_contract']:.2f}\\n" +
+                               f"P/E: {covered_call_signal['pe_ratio']:.1f} | IV Rank: {covered_call_signal['iv_rank']:.1f}\\n" +
+                               f"💰 {covered_call_signal['recommendation']}",
+                        priority=1
+                    )
+                
+                # Covered Call Exit Signals (für bestehende Positionen)
+                covered_call_exit = self.check_covered_call_exit_signals(symbol, df)
+                if covered_call_exit:
+                    logger.info(f"\n{'='*70}")
+                    logger.info(f"[EXIT SIGNAL] COVERED CALL EXIT: {symbol}")
+                    logger.info(f"  Grund: {covered_call_exit['reason']}")
+                    logger.info(f"  Aktueller Preis: ${covered_call_exit['current_price']:.2f}")
+                    logger.info(f"  Strike: {covered_call_exit['strike']}")
+                    logger.info(f"  DTE: {covered_call_exit['dte']}")
+                    logger.info(f"  Entry Premium: ${covered_call_exit['entry_premium']:.2f}")
+                    logger.info(f"  Unrealized P&L: ${covered_call_exit['unrealized_pnl']:.2f}")
+                    logger.info(f"  Nachricht: {covered_call_exit['message']}")
+                    logger.info(f"{'='*70}")
+                    
+                    # Speichere Exit-Signal
+                    self.db.save_options_signal(covered_call_exit)
+                    
+                    # Sende dringende Benachrichtigung
+                    self.notifier.send_notification(
+                        title=f"[COVERED CALL EXIT] {symbol}",
+                        message=f"🚨 {covered_call_exit['message']}\\n" +
+                               f"Strike: {covered_call_exit['strike']} | DTE: {covered_call_exit['dte']}\\n" +
+                               f"Aktueller Preis: ${covered_call_exit['current_price']:.2f}\\n" +
+                               f"Unrealized P&L: ${covered_call_exit['unrealized_pnl']:.2f}",
+                        priority=2  # Hohe Priorität für Exit-Signale
                     )
                 
                 time.sleep(2)  # Rate Limiting zwischen Symbolen
@@ -1349,14 +2911,25 @@ def main():
 if __name__ == "__main__":
     import sys
     
-    logging.basicConfig(
-        level=getattr(logging, config.LOG_LEVEL),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(os.path.join(os.path.dirname(__file__), "logs", "options_scanner.log")),
-            logging.StreamHandler()
-        ]
-    )
+    try:
+        logging.basicConfig(
+            level=getattr(logging, config.LOG_LEVEL),
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(os.path.join(os.path.dirname(__file__), "logs", "options_scanner.log")),
+                logging.StreamHandler()
+            ]
+        )
+    except PermissionError:
+        # Fallback: Nur Konsolen-Logging wenn Datei-Lock
+        logging.basicConfig(
+            level=getattr(logging, config.LOG_LEVEL),
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler()
+            ]
+        )
+        print("WARNUNG: Options-Scanner Log-Datei gesperrt - verwende nur Konsolen-Logging")
     
     # Erstelle Logs-Verzeichnis
     os.makedirs(os.path.join(os.path.dirname(__file__), "logs"), exist_ok=True)

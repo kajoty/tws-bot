@@ -28,14 +28,14 @@ if not exist logs mkdir logs
 
 REM Starte Web-Dashboard im Hintergrund
 echo Starte Web-Dashboard...
-start "TWS-Web-Dashboard" cmd /c "python -m tws_bot.web.app > logs\web_app.log 2>&1"
+start "TWS-Web-Dashboard" cmd /c "python web_app.py > logs\web_app.log 2>&1"
 
 REM Warte kurz für Initialisierung
 timeout /t 3 /nobreak >nul
 
 REM Starte Aktien-Signal-Service im Hintergrund
 echo Starte Aktien-Signal-Service...
-start "TWS-Aktien-Scanner" cmd /c "python -m tws_bot.signal_service > logs\signal_service.log 2>&1"
+start "TWS-Aktien-Scanner" cmd /c "python signal_service.py > logs\signal_service.log 2>&1"
 
 REM Starte Options-Scanner im Hintergrund
 echo Starte Options-Scanner...

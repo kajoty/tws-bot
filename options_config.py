@@ -76,8 +76,19 @@ SPREAD_PROXIMITY_TO_HIGH_PCT = float(os.getenv("SPREAD_PROXIMITY_TO_HIGH_PCT", "
 # Fundamentale Überbewertung: P/E über Branchen-Median (wie Long Put)
 SPREAD_PE_RATIO_MULTIPLIER = float(os.getenv("SPREAD_PE_RATIO_MULTIPLIER", "1.5"))  # 150%
 
+# BULL PUT SPREAD STRATEGIE (SHORT AM 52W-TIEF)
+# ============================================================================
+
+# Technischer Trigger: Nähe zum 52-Wochen-Tief (wie Long Call)
+SPREAD_PROXIMITY_TO_LOW_PCT = float(os.getenv("SPREAD_PROXIMITY_TO_LOW_PCT", "0.02"))  # 2%
+
+# Fundamentale Unterbewertung: P/E unter Branchen-Median
+SPREAD_PE_RATIO_MULTIPLIER_LOW = float(os.getenv("SPREAD_PE_RATIO_MULTIPLIER_LOW", "0.8"))  # 80%
+
+# FCF Yield Minimum (für Bull Put Spread)
+SPREAD_MIN_FCF_YIELD = float(os.getenv("SPREAD_MIN_FCF_YIELD", "0.03"))  # 3%
+
 # Implizite Volatilität: IV Rank Minimum
-SPREAD_MIN_IV_RANK = float(os.getenv("SPREAD_MIN_IV_RANK", "70"))  # Oberes Drittel
 
 # Options-Parameter
 SPREAD_MIN_DTE = int(os.getenv("SPREAD_MIN_DTE", "30"))
@@ -93,6 +104,30 @@ SPREAD_STOP_LOSS_STRIKE_BREACH = True  # Close wenn Aktienkurs den Long Strike e
 SPREAD_TAKE_PROFIT_MIN_PCT = float(os.getenv("SPREAD_TAKE_PROFIT_MIN_PCT", "0.50"))  # 50%
 SPREAD_TAKE_PROFIT_MAX_PCT = float(os.getenv("SPREAD_TAKE_PROFIT_MAX_PCT", "0.75"))  # 75%
 SPREAD_AUTO_CLOSE_DTE = int(os.getenv("SPREAD_AUTO_CLOSE_DTE", "7"))  # 7 Tage vor Verfall
+
+# ============================================================================
+# COVERED CALL STRATEGIE (VERKAUF VON CALLS AUF EIGENE AKTIEN)
+# ============================================================================
+
+# Technischer Trigger: Nähe zum 52-Wochen-Hoch
+COVERED_CALL_PROXIMITY_TO_HIGH_PCT = float(os.getenv("COVERED_CALL_PROXIMITY_TO_HIGH_PCT", "0.02"))  # 2%
+
+# Fundamentale Bewertung: Nicht extrem überbewertet
+COVERED_CALL_PE_RATIO_MULTIPLIER = float(os.getenv("COVERED_CALL_PE_RATIO_MULTIPLIER", "1.3"))  # 130%
+
+# Options-Parameter
+COVERED_CALL_MIN_DTE = int(os.getenv("COVERED_CALL_MIN_DTE", "30"))
+COVERED_CALL_MAX_DTE = int(os.getenv("COVERED_CALL_MAX_DTE", "60"))
+
+# Strike-Auswahl
+COVERED_CALL_MIN_OTM_PCT = float(os.getenv("COVERED_CALL_MIN_OTM_PCT", "0.05"))  # 5% OTM
+COVERED_CALL_MAX_OTM_PCT = float(os.getenv("COVERED_CALL_MAX_OTM_PCT", "0.15"))  # 15% OTM
+
+# IV Rank Minimum
+COVERED_CALL_MIN_IV_RANK = float(os.getenv("COVERED_CALL_MIN_IV_RANK", "60"))  # Mittleres Niveau
+
+# Risikomanagement
+COVERED_CALL_MAX_LOSS_PCT = float(os.getenv("COVERED_CALL_MAX_LOSS_PCT", "0.10"))  # Max 10% Verlust auf Position
 
 # ============================================================================
 # SCANNER EINSTELLUNGEN

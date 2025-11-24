@@ -57,6 +57,17 @@ STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.02"))  # 2%
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "0.05"))  # 5%
 
 # ============================================================================
+# KOMMISSIONSKOSTEN (IB Pro)
+# ============================================================================
+
+# Options-Kommissionen (pro Kontrakt)
+OPTIONS_COMMISSION_PER_CONTRACT = float(os.getenv("OPTIONS_COMMISSION_PER_CONTRACT", "2.50"))  # € pro Kontrakt
+STOCK_COMMISSION_PER_TRADE = float(os.getenv("STOCK_COMMISSION_PER_TRADE", "0.005"))  # 0.5% vom Trade-Wert (min. 1€)
+
+# Spread-Kosten: Pro "Bein" des Spreads
+SPREAD_COMMISSION_MULTIPLIER = float(os.getenv("SPREAD_COMMISSION_MULTIPLIER", "1.0"))  # 1x normale Kommission pro Bein
+
+# ============================================================================
 # TECHNISCHE INDIKATOREN
 # ============================================================================
 

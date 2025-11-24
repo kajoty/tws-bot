@@ -40,7 +40,17 @@ Signal-Service für Interactive Brokers TWS. Generiert Entry/Exit Trading-Signal
 3. Erstelle neue Application → Erhalte **API Token**
 4. Installiere Pushover App auf deinem Smartphone
 
-### 3. Installation
+### 3. Alpha Vantage API (Optional - für Earnings-Daten)
+
+Für realistische Earnings-Daten und besseres Risikomanagement:
+
+1. Registriere dich kostenlos auf [alphavantage.co](https://www.alphavantage.co/support/#api-key)
+2. Erhalte deinen kostenlosen **API Key**
+3. Füge ihn zur `.env` hinzu: `ALPHA_VANTAGE_API_KEY=your_key_here`
+
+**Ohne API Key**: Das System simuliert Earnings-Daten automatisch (Fallback-Modus).
+
+### 4. Installation
 
 ```bash
 # Repository klonen
@@ -55,7 +65,7 @@ cp .env.example .env
 nano .env  # Credentials eintragen
 ```
 
-### 4. Konfiguration (.env)
+### 5. Konfiguration (.env)
 
 ```bash
 # TWS Verbindung
@@ -68,6 +78,9 @@ IS_PAPER_TRADING=True
 PUSHOVER_USER_KEY=your_user_key_here
 PUSHOVER_API_TOKEN=your_api_token_here
 
+# Alpha Vantage API (Optional - für echte Earnings-Daten)
+ALPHA_VANTAGE_API_KEY=your_alpha_vantage_api_key_here
+
 # Watchlist (kommasepariert, keine Leerzeichen!)
 WATCHLIST_STOCKS=AAPL,MSFT,GOOGL,AMZN,TSLA
 
@@ -77,7 +90,7 @@ MAX_RISK_PER_TRADE_PCT=0.01  # 1% Risiko pro Trade
 MAX_CONCURRENT_POSITIONS=5
 ```
 
-### 5. Test Pushover
+### 6. Test Pushover
 
 ```bash
 # Teste Pushover-Benachrichtigungen
@@ -86,7 +99,7 @@ python3 pushover_notifier.py
 
 Du solltest eine Test-Nachricht auf deinem Smartphone erhalten.
 
-### 6. Service starten
+### 7. Service starten
 
 ```bash
 # TWS muss bereits laufen!

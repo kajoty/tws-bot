@@ -374,7 +374,7 @@ class TWSConnector(EWrapper, EClient):
                     'symbol': pos.get('symbol', ''),
                     'position': pos.get('position', 0),
                     'marketValue': pos.get('marketValue', 0),
-                    'avgCost': pos.get('averageCost', 0),  # Normalisiere von averageCost
+                    'avgCost': pos.get('avgCost', 0),  # Direkt aus updatePortfolio Callback
                     'unrealizedPNL': pos.get('unrealizedPNL', 0),
                     'marketPrice': pos.get('marketPrice', 0)
                 }
