@@ -53,7 +53,7 @@ def main():
             'low': prices - np.abs(np.random.randn(60))
         })
 
-        signal = check_entry_signal('TEST', df, tws_connector=None)
+        signal = check_entry_signal('TEST', df, tws_connector=None, portfolio_data={})
         if signal:
             print('   ✅ Signal-Generierung: OK')
             print(f'   📊 Signal-Typ: {signal["type"]}')

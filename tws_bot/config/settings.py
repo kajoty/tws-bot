@@ -48,6 +48,10 @@ MAX_RISK_PER_TRADE_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.01"))
 MAX_CONCURRENT_POSITIONS = int(os.getenv("MAX_CONCURRENT_POSITIONS", "5"))
 MIN_POSITION_SIZE = float(os.getenv("MIN_POSITION_SIZE", "100.0"))
 
+# Portfolio-basierte Signal-Filterung
+MIN_CUSHION_FOR_SIGNALS = float(os.getenv("MIN_CUSHION_FOR_SIGNALS", "0.05"))  # Mindestens 5% Cushion für Signale
+MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "10"))  # Max Positionen für Signal-Generierung
+
 # Stop-Loss & Take-Profit (als Prozentsatz)
 STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.02"))  # 2%
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "0.05"))  # 5%

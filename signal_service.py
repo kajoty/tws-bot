@@ -496,6 +496,16 @@ class SignalService(TWSConnector):
         logger.info(f"  SIGNAL SCAN - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("="*70)
         
+        # Portfolio-Daten für Risiko-Management abrufen
+        try:
+            portfolio_data = self.get_portfolio_data()
+            logger.info(f"[PORTFOLIO] Cushion: {portfolio_data.get('cushion', 0):.1%} | "
+                       f"Buying Power: ${portfolio_data.get('buying_power', 0):,.0f} | "
+                       f"Positionen: {portfolio_data.get('num_positions', 0)}")
+        except Exception as e:
+            logger.warning(f"[PORTFOLIO] Fehler beim Abrufen der Portfolio-Daten: {e}")
+            portfolio_data = {}
+        
         for symbol in self.watchlist:
             try:
                 # --- Fundamentaldaten prüfen/laden ---
@@ -553,7 +563,7 @@ class SignalService(TWSConnector):
                                 f"TP: ${position['take_profit']:.2f}")
                 else:
                     # Prüfe Entry-Signale (nur wenn keine Position)
-                    entry_signal = check_entry_signal(symbol, df, self)
+                    entry_signal = check_entry_signal(symbol, df, self, portfolio_data)
                     if entry_signal:
                         self.process_signal(entry_signal)
                         self.metrics['signals_generated'] += 1

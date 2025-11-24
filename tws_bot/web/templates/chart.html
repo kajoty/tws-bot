@@ -21,8 +21,26 @@
     </div>
 
     <script>
-        var chartData = {{ chart_json|safe }};
-        Plotly.newPlot('chart', chartData.data, chartData.layout, {responsive: true});
+        // Chart-Daten aus Python
+        var chartData = {
+            data: {{ chart_data.data|tojson }},
+            layout: {{ chart_data.layout|tojson }}
+        };
+
+        console.log('Chart data:', chartData);
+
+        // Erstelle Chart
+        Plotly.newPlot('chart', chartData.data, chartData.layout, {responsive: true})
+            .then(function() {
+                console.log('Chart rendered successfully');
+            })
+            .catch(function(error) {
+                console.error('Chart error:', error);
+                document.getElementById('chart').innerHTML =
+                    '<p style="color: red; text-align: center; padding: 20px;">' +
+                    'Fehler beim Laden des Charts: ' + error.message + '<br>' +
+                    'Bitte versuchen Sie es später nochmal.</p>';
+            });
     </script>
 </body>
 </html>

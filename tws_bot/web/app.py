@@ -4,6 +4,7 @@ from ..data.database import DatabaseManager
 from ..config.settings import *
 from ..core.indicators import calculate_indicators
 from ..core.signals import check_entry_signal
+from ..api.tws_connector import TWSConnector
 import logging
 import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
@@ -179,13 +180,59 @@ def get_performance_stats():
         }
 
 def create_price_chart(df, symbol):
-    """Erstelle Preis-Chart mit Plotly"""
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df['close'], mode='lines', name='Preis'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['ma_short'], mode='lines', name='MA Kurz'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['ma_long'], mode='lines', name='MA Lang'))
-    fig.update_layout(title=f'Preis-Chart {symbol}', xaxis_title='Datum', yaxis_title='Preis')
-    return json.dumps(fig, cls=PlotlyJSONEncoder)
+    """Erstelle Preis-Chart mit Plotly - vereinfachte Version für Web"""
+    # Begrenze Daten auf letzte 50 Einträge für Performance
+    df = df.tail(50) if len(df) > 50 else df
+
+    # Konvertiere Daten zu Listen - handle verschiedene Index-Typen
+    if hasattr(df.index, 'strftime'):
+        # DatetimeIndex
+        dates = [d.strftime('%Y-%m-%d') for d in df.index]
+    else:
+        # Integer oder anderer Index
+        dates = [str(i) for i in range(len(df))]
+    close_prices = df['close'].round(2).tolist()
+    ma_short = df['ma_short'].round(2).tolist()
+    ma_long = df['ma_long'].round(2).tolist()
+
+    # Erstelle einfaches JSON ohne komplexe Plotly-Objekte
+    chart_data = {
+        'data': [
+            {
+                'x': dates,
+                'y': close_prices,
+                'type': 'scatter',
+                'mode': 'lines',
+                'name': 'Preis',
+                'line': {'color': 'blue'}
+            },
+            {
+                'x': dates,
+                'y': ma_short,
+                'type': 'scatter',
+                'mode': 'lines',
+                'name': 'MA Kurz',
+                'line': {'color': 'orange', 'dash': 'dot'}
+            },
+            {
+                'x': dates,
+                'y': ma_long,
+                'type': 'scatter',
+                'mode': 'lines',
+                'name': 'MA Lang',
+                'line': {'color': 'red', 'dash': 'dash'}
+            }
+        ],
+        'layout': {
+            'title': f'Preis-Chart {symbol}',
+            'xaxis': {'title': 'Datum'},
+            'yaxis': {'title': 'Preis'},
+            'showlegend': True,
+            'margin': {'l': 50, 'r': 50, 't': 50, 'b': 50}
+        }
+    }
+
+    return json.dumps(chart_data)
 
 @app.route('/')
 def dashboard():
@@ -198,6 +245,18 @@ def dashboard():
         total_tickers = len(watchlist)
         avg_rate = 0
         total_signals = 0
+
+        # Initialisiere portfolio_data frühzeitig
+        portfolio_data = {
+            'net_liquidation': 0,
+            'total_cash': 0,
+            'buying_power': 0,
+            'available_funds': 0,
+            'cushion': 0,
+            'portfolio_value': 0,
+            'num_positions': 0,
+            'positions': []
+        }
 
         # Prüfe Datenbankverbindung
         try:
@@ -236,7 +295,7 @@ def dashboard():
                 entry = {'symbol': symbol, 'rate': rate, 'indicators': ', '.join(active) if active else 'Keine', 'current': current}
 
                 # Prüfe auf Entry-Signal
-                entry_signal = check_entry_signal(symbol, df)
+                entry_signal = check_entry_signal(symbol, df, None, portfolio_data)
                 if entry_signal:
                     quantity, stop_loss, take_profit = calculate_position_size(entry_signal['price'])
                     entry_signal.update({
@@ -310,6 +369,20 @@ def dashboard():
                 'bear_call_spread_signals': 0, 'avg_iv_rank': 0, 'avg_proximity_pct': 0
             }
 
+        # Lade Portfolio-Daten von TWS
+        try:
+            tws_connector = TWSConnector()
+            if tws_connector.connect_to_tws():
+                portfolio_data = tws_connector.get_portfolio_data()
+                tws_connector.disconnect()
+                logger.info("Portfolio-Daten erfolgreich geladen")
+            else:
+                logger.warning("TWS Verbindung für Portfolio-Daten fehlgeschlagen")
+                # portfolio_data bleibt mit Default-Werten
+        except Exception as port_error:
+            logger.error(f"Fehler beim Laden von Portfolio-Daten: {port_error}")
+            # portfolio_data bleibt mit Default-Werten
+
         # Pagination für Marktübersicht
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 25))
@@ -335,6 +408,7 @@ def dashboard():
                              performance_stats=performance_stats,
                              options_signals=options_signals_list,
                              options_stats=options_stats,
+                             portfolio_data=portfolio_data,
                              filter_level=filter_level,
                              current_page=page,
                              total_pages=total_pages,
@@ -392,7 +466,9 @@ def chart(symbol):
         df = calculate_indicators(df)
         chart_json = create_price_chart(df, symbol)
 
-        return render_template('chart.html', symbol=symbol, chart_json=chart_json)
+        # Parse JSON für separate Übergabe an Template
+        chart_data = json.loads(chart_json)
+        return render_template('chart.html', symbol=symbol, chart_data=chart_data)
 
     except Exception as e:
         logger.error(f"Kritischer Fehler beim Erstellen des Charts für {symbol}: {e}", exc_info=True)

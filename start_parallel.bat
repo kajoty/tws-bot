@@ -2,7 +2,7 @@
 echo ========================================
 echo TWS Signal Service - Paralleler Start
 echo ========================================
-cd /d "c:\Users\Karsten Jochens\Documents\VSCode_Projekte\tws-bot"
+cd /d "%~dp0"
 
 echo Aktiviere virtuelle Umgebung...
 call venv\Scripts\activate.bat

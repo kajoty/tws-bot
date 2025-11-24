@@ -9,16 +9,16 @@
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
         h1 { color: #333; text-align: center; }
         .container { max-width: 1200px; margin: 0 auto; }
-        .stats { display: flex; justify-content: space-around; margin: 20px 0; }
-        .stat-box { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }
+        .stats { display: flex; justify-content: space-around; margin: 20px 0; flex-wrap: wrap; gap: 15px; }
+        .stat-box { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; flex: 1 1 calc(25% - 15px); min-width: 200px; box-sizing: border-box; }
         .signal { border: 1px solid #ccc; padding: 15px; margin: 10px 0; border-radius: 5px; background: white; }
         .entry { background-color: #d4edda; border-color: #c3e6cb; }
         .exit { background-color: #f8d7da; border-color: #f5c6cb; }
         table { width: 100%; border-collapse: collapse; margin: 20px 0; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
         th { background-color: #f8f9fa; font-weight: bold; }
-        .filter-buttons { margin: 20px 0; text-align: center; }
-        .filter-btn { padding: 10px 20px; margin: 0 5px; border: none; border-radius: 5px; cursor: pointer; background: #007bff; color: white; }
+        .filter-buttons { margin: 20px 0; text-align: center; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+        .filter-btn { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; background: #007bff; color: white; text-decoration: none; display: inline-block; }
         .filter-btn.active { background: #0056b3; }
         .chart-link { color: #007bff; text-decoration: none; }
         .chart-link:hover { text-decoration: underline; }
@@ -41,7 +41,7 @@
             </div>
             <div class="stat-box">
                 <h3>Durchschnittliche Trefferquote</h3>
-                <p>{{ "%.1f"|format(avg_rate) }}%</p>
+                <p>{{ "%.1f"|format(avg_rate if avg_rate is defined else 0) }}%</p>
             </div>
             <div class="stat-box">
                 <h3>Aktive Signale</h3>
@@ -53,7 +53,7 @@
             </div>
             <div class="stat-box">
                 <h3>Performance Win-Rate</h3>
-                <p>{{ "%.1f"|format(performance_stats.win_rate) }}%</p>
+                <p>{{ "%.1f"|format(performance_stats.win_rate if performance_stats.win_rate is defined else 0) }}%</p>
             </div>
             <div class="stat-box">
                 <h3>Gesamt Signale</h3>
@@ -65,11 +65,27 @@
             </div>
             <div class="stat-box">
                 <h3>Ø IV Rank</h3>
-                <p>{{ "%.1f"|format(options_stats.avg_iv_rank) }}</p>
+                <p>{{ "%.1f"|format(options_stats.avg_iv_rank if options_stats.avg_iv_rank is defined else 0) }}</p>
             </div>
             <div class="stat-box">
                 <h3>Ø Proximity</h3>
-                <p>{{ "%.1f"|format(options_stats.avg_proximity_pct) }}%</p>
+                <p>{{ "%.1f"|format(options_stats.avg_proximity_pct if options_stats.avg_proximity_pct is defined else 0) }}%</p>
+            </div>
+            <div class="stat-box">
+                <h3>Portfolio-Wert</h3>
+                <p>${{ "{:,.0f}".format(portfolio_data.portfolio_value if portfolio_data.portfolio_value is defined else 0) }}</p>
+            </div>
+            <div class="stat-box">
+                <h3>Kaufkraft</h3>
+                <p>${{ "{:,.0f}".format(portfolio_data.buying_power if portfolio_data.buying_power is defined else 0) }}</p>
+            </div>
+            <div class="stat-box">
+                <h3>Cushion</h3>
+                <p class="{% if (portfolio_data.cushion if portfolio_data.cushion is defined else 0) > 0.3 %}positive{% elif (portfolio_data.cushion if portfolio_data.cushion is defined else 0) > 0.1 %}warning{% else %}negative{% endif %}">{{ "%.1f"|format((portfolio_data.cushion if portfolio_data.cushion is defined else 0) * 100) }}%</p>
+            </div>
+            <div class="stat-box">
+                <h3>Positionen</h3>
+                <p>{{ portfolio_data.num_positions }}</p>
             </div>
         </div>
 
@@ -87,9 +103,9 @@
         {% if signals %}
             {% for signal in signals %}
                 <div class="signal {{ 'entry' if signal.type == 'entry' else 'exit' }}">
-                    <strong>{{ signal.symbol }}</strong> - {{ signal.type.upper() }} bei ${{ "%.2f"|format(signal.price) }}
+                    <strong>{{ signal.symbol }}</strong> - {{ signal.type.upper() }} bei ${{ "%.2f"|format(signal.price if signal.price is defined else 0) }}
                     {% if signal.quantity %}
-                        <br>Quantität: {{ signal.quantity }} | Stop Loss: ${{ "%.2f"|format(signal.stop_loss) }} | Take Profit: ${{ "%.2f"|format(signal.take_profit) }}
+                        <br>Quantität: {{ signal.quantity }} | Stop Loss: ${{ "%.2f"|format(signal.stop_loss if signal.stop_loss is defined else 0) }} | Take Profit: ${{ "%.2f"|format(signal.take_profit if signal.take_profit is defined else 0) }}
                     {% endif %}
                     <br>Grund: {{ signal.reason }}
                     <br><a href="/chart/{{ signal.symbol }}" class="chart-link">Chart anzeigen</a>
@@ -118,11 +134,11 @@
                     {% for entry in entries %}
                         <tr>
                             <td><strong>{{ entry.symbol }}</strong></td>
-                            <td>{{ "%.1f"|format(entry.rate) }}%</td>
+                            <td>{{ "%.1f"|format(entry.rate if entry.rate is defined else 0) }}%</td>
                             <td>{{ entry.indicators }}</td>
-                            <td>${{ "%.2f"|format(entry.current.price) }}</td>
-                            <td>{{ "%.1f"|format(entry.current.rsi) }}</td>
-                            <td>{{ "%.2f"|format(entry.current.ma_short) }} / {{ "%.2f"|format(entry.current.ma_long) }}</td>
+                            <td>${{ "%.2f"|format(entry.current.price if entry.current.price is defined else 0) }}</td>
+                            <td>{{ "%.1f"|format(entry.current.rsi if entry.current.rsi is defined else 0) }}</td>
+                            <td>{{ "%.2f"|format(entry.current.ma_short if entry.current.ma_short is defined else 0) }} / {{ "%.2f"|format(entry.current.ma_long if entry.current.ma_long is defined else 0) }}</td>
                             <td>{% if entry.current.macd is defined %}{{ "%.4f"|format(entry.current.macd) }}{% else %}-{% endif %}</td>
                             <td><a href="/chart/{{ entry.symbol }}" class="chart-link">Anzeigen</a></td>
                         </tr>
@@ -148,7 +164,7 @@
                         <td>{{ signal.timestamp }}</td>
                         <td>{{ signal.symbol }}</td>
                         <td>{{ signal.type }}</td>
-                        <td>${{ "%.2f"|format(signal.price) }}</td>
+                        <td>${{ "%.2f"|format(signal.price if signal.price is defined else 0) }}</td>
                         <td>{{ signal.quantity }}</td>
                         <td>{{ signal.reason }}</td>
                     </tr>
@@ -193,6 +209,68 @@
             <p>Keine Options-Signale gefunden.</p>
         {% endif %}
 
+        <!-- Portfolio-Übersicht -->
+        <h2>Portfolio-Übersicht</h2>
+        <div class="portfolio-summary">
+            <div class="portfolio-stats">
+                <div class="stat-box">
+                    <h4>Netto-Liquidation</h4>
+                    <p>${{ "{:,.0f}".format(portfolio_data.net_liquidation if portfolio_data.net_liquidation is defined else 0) }}</p>
+                </div>
+                <div class="stat-box">
+                    <h4>Gesamt Cash</h4>
+                    <p>${{ "{:,.0f}".format(portfolio_data.total_cash if portfolio_data.total_cash is defined else 0) }}</p>
+                </div>
+                <div class="stat-box">
+                    <h4>Verfügbare Mittel</h4>
+                    <p>${{ "{:,.0f}".format(portfolio_data.available_funds if portfolio_data.available_funds is defined else 0) }}</p>
+                </div>
+                <div class="stat-box">
+                    <h4>Cushion Status</h4>
+                    <p class="{% if (portfolio_data.cushion if portfolio_data.cushion is defined else 0) > 0.3 %}positive{% elif (portfolio_data.cushion if portfolio_data.cushion is defined else 0) > 0.1 %}warning{% else %}negative{% endif %}">
+                        {{ "%.1f"|format((portfolio_data.cushion if portfolio_data.cushion is defined else 0) * 100) }}%
+                        {% if (portfolio_data.cushion if portfolio_data.cushion is defined else 0) < 0.1 %}
+                            <br><small>⚠️ Niedrig!</small>
+                        {% elif (portfolio_data.cushion if portfolio_data.cushion is defined else 0) < 0.3 %}
+                            <br><small>⚠️ Beachten</small>
+                        {% else %}
+                            <br><small>✅ Gut</small>
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        {% if portfolio_data.positions %}
+            <h3>Aktuelle Positionen</h3>
+            <table>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Typ</th>
+                    <th>Position</th>
+                    <th>Durchschnittskosten</th>
+                    <th>Marktwert</th>
+                    <th>P&L unrealisiert</th>
+                </tr>
+                {% for position in portfolio_data.positions %}
+                    {% if position.position != 0 %}
+                        <tr>
+                            <td><strong>{{ position.symbol }}</strong></td>
+                            <td>{{ position.secType }}</td>
+                            <td>{{ "{:,.0f}".format(position.position if position.position is defined else 0) }}</td>
+                            <td>${{ "%.2f"|format(position.avgCost if position.avgCost is defined else 0) }}</td>
+                            <td>${{ "{:,.0f}".format(position.marketValue if position.marketValue is defined else 0) }}</td>
+                            <td class="{% if ((position.marketValue if position.marketValue is defined else 0) - ((position.position if position.position is defined else 0) * (position.avgCost if position.avgCost is defined else 0))) > 0 %}positive{% else %}negative{% endif %}">
+                                ${{ "{:,.0f}".format((position.marketValue if position.marketValue is defined else 0) - ((position.position if position.position is defined else 0) * (position.avgCost if position.avgCost is defined else 0))) }}
+                            </td>
+                        </tr>
+                    {% endif %}
+                {% endfor %}
+            </table>
+        {% else %}
+            <p>Keine aktiven Positionen gefunden.</p>
+        {% endif %}
+
         <!-- Marktübersicht -->
         <h2>Marktübersicht</h2>
         {% if market_overview %}
@@ -219,14 +297,14 @@
                 {% for stock in market_overview %}
                     <tr>
                         <td><strong>{{ stock.symbol }}</strong></td>
-                        <td>${{ "%.2f"|format(stock.price) }}</td>
-                        <td class="{% if stock.change > 0 %}positive{% else %}negative{% endif %}">
-                            {{ "%.2f"|format(stock.change) }}%
+                        <td>${{ "%.2f"|format(stock.price if stock.price is defined else 0) }}</td>
+                        <td class="{% if (stock.change if stock.change is defined else 0) > 0 %}positive{% else %}negative{% endif %}">
+                            {{ "%.2f"|format(stock.change if stock.change is defined else 0) }}%
                         </td>
-                        <td>{{ "%.1f"|format(stock.rsi) }}</td>
-                        <td>{{ "%.2f"|format(stock.ma_short) }} / {{ "%.2f"|format(stock.ma_long) }}</td>
-                        <td>{{ "%.4f"|format(stock.atr) }}</td>
-                        <td>{{ "{:,}".format(stock.volume) }}</td>
+                        <td>{{ "%.1f"|format(stock.rsi if stock.rsi is defined else 0) }}</td>
+                        <td>{{ "%.2f"|format(stock.ma_short if stock.ma_short is defined else 0) }} / {{ "%.2f"|format(stock.ma_long if stock.ma_long is defined else 0) }}</td>
+                        <td>{{ "%.4f"|format(stock.atr if stock.atr is defined else 0) }}</td>
+                        <td>{{ "{:,}".format(stock.volume if stock.volume is defined else 0) }}</td>
                         <td><a href="/chart/{{ stock.symbol }}" class="chart-link">Anzeigen</a></td>
                     </tr>
                 {% endfor %}

@@ -11,7 +11,7 @@ from ..config.settings import (
     RSI_OVERSOLD, MIN_SIGNALS_FOR_ENTRY, STOP_LOSS_PCT,
     TAKE_PROFIT_PCT, ACCOUNT_SIZE, MAX_RISK_PER_TRADE_PCT,
     MIN_POSITION_SIZE, USE_VIX_FILTER, VIX_MAX_LEVEL, VIX_HIGH_LEVEL,
-    USE_ATR, ATR_MULTIPLIER, USE_BB
+    USE_ATR, ATR_MULTIPLIER, USE_BB, MIN_CUSHION_FOR_SIGNALS, MAX_POSITIONS
 )
 
 
@@ -36,7 +36,7 @@ def get_vix_level(tws_connector) -> Optional[float]:
         return None
 
 
-def check_entry_signal(symbol: str, df: pd.DataFrame, tws_connector=None) -> Optional[Dict]:
+def check_entry_signal(symbol: str, df: pd.DataFrame, tws_connector=None, portfolio_data=None) -> Optional[Dict]:
     """
     Prüft Entry-Signal Bedingungen.
 
@@ -47,6 +47,21 @@ def check_entry_signal(symbol: str, df: pd.DataFrame, tws_connector=None) -> Opt
     Returns:
         Signal-Dict oder None
     """
+    # Portfolio-basierte Signal-Filterung
+    if portfolio_data:
+        cushion = portfolio_data.get('cushion', 0)
+        num_positions = portfolio_data.get('num_positions', 0)
+        
+        # Signal ablehnen bei zu niedrigem Cushion
+        if cushion < MIN_CUSHION_FOR_SIGNALS:
+            print(f"Signal für {symbol} abgelehnt - Cushion zu niedrig ({cushion:.1%} < {MIN_CUSHION_FOR_SIGNALS:.1%})")
+            return None
+            
+        # Signal ablehnen bei zu vielen Positionen
+        if num_positions >= MAX_POSITIONS:
+            print(f"Signal für {symbol} abgelehnt - Zu viele Positionen ({num_positions} >= {MAX_POSITIONS})")
+            return None
+
     # Indikatoren berechnen
     df = calculate_indicators(df)
 
@@ -121,9 +136,32 @@ def check_entry_signal(symbol: str, df: pd.DataFrame, tws_connector=None) -> Opt
             stop_loss = price * (1 - STOP_LOSS_PCT)
             take_profit = price * (1 + TAKE_PROFIT_PCT)
 
-        # Position Size berechnen (VIX-adjustiert)
+        # Position Size berechnen (VIX-adjustiert + Portfolio-basiert)
         risk_amount = ACCOUNT_SIZE * MAX_RISK_PER_TRADE_PCT
 
+        # Portfolio-basierte Risiko-Anpassung
+        if portfolio_data:
+            cushion = portfolio_data.get('cushion', 0)
+            buying_power = portfolio_data.get('buying_power', ACCOUNT_SIZE)
+            num_positions = portfolio_data.get('num_positions', 0)
+            
+            # Cushion-basierte Risiko-Anpassung
+            if cushion < 0.1:  # Sehr niedriger Cushion (< 10%)
+                risk_amount *= 0.3  # Stark reduzieren
+                print(f"Sehr niedriger Cushion ({cushion:.1%}) - Risiko stark reduziert auf {risk_amount:.0f}")
+            elif cushion < 0.3:  # Niedriger Cushion (< 30%)
+                risk_amount *= 0.6  # Moderat reduzieren
+                print(f"Niedriger Cushion ({cushion:.1%}) - Risiko reduziert auf {risk_amount:.0f}")
+            
+            # Positions-basierte Anpassung (mehr Positionen = weniger Risiko pro Trade)
+            if num_positions > 10:
+                risk_amount *= 0.8
+                print(f"Viele Positionen ({num_positions}) - Risiko pro Trade reduziert")
+            
+            # Buying Power Limit
+            max_risk_from_buying_power = buying_power * 0.02  # Max 2% der Buying Power
+            risk_amount = min(risk_amount, max_risk_from_buying_power)
+            
         # Bei hohem VIX Risiko reduzieren
         if USE_VIX_FILTER and tws_connector:
             vix_level = get_vix_level(tws_connector)

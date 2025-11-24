@@ -17,7 +17,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-cd /d "c:\Users\Karsten Jochens\Documents\VSCode_Projekte\tws-bot"
+cd /d "%~dp0"
 
 REM Aktiviere virtuelle Umgebung
 echo Aktiviere virtuelle Umgebung...
