@@ -4,7 +4,7 @@ Pushover Benachrichtigungsmodul für Trading Signale.
 
 import logging
 from pushover_complete import PushoverAPI
-import config
+from ..config.settings import PUSHOVER_USER_KEY, PUSHOVER_API_TOKEN, PUSHOVER_PRIORITY, PUSHOVER_SOUND
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +20,8 @@ class PushoverNotifier:
             user_key: Pushover User Key (optional, nutzt config.PUSHOVER_USER_KEY)
             api_token: Pushover API Token (optional, nutzt config.PUSHOVER_API_TOKEN)
         """
-        self.user_key = user_key or config.PUSHOVER_USER_KEY
-        self.api_token = api_token or config.PUSHOVER_API_TOKEN
+        self.user_key = user_key or PUSHOVER_USER_KEY
+        self.api_token = api_token or PUSHOVER_API_TOKEN
         
         if not self.user_key or not self.api_token:
             logger.warning("[WARNUNG] Pushover Credentials fehlen! Benachrichtigungen deaktiviert.")

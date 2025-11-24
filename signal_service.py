@@ -12,19 +12,25 @@ from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
 
-from ibapi.client import EClient
-from ibapi.wrapper import EWrapper
-from ibapi.contract import Contract
-
-import config
-from pushover_notifier import PushoverNotifier
-from database import DatabaseManager
+from tws_bot.config.settings import (
+    WATCHLIST_STOCKS, SCAN_INTERVAL, HISTORY_DAYS, DATA_MAX_AGE_DAYS,
+    LOG_LEVEL, LOG_FILE, SIGNAL_ONLY_MODE, DRY_RUN,
+    MIN_MARKET_CAP, MIN_AVG_VOLUME, PUT_PE_RATIO_MULTIPLIER, PUT_MIN_IV_RANK,
+    CALL_MIN_FCF_YIELD, CALL_MAX_IV_RANK, SPREAD_PE_RATIO_MULTIPLIER, SPREAD_MIN_IV_RANK,
+    IB_HOST, IB_PORT, IS_PAPER_TRADING, PUSHOVER_USER_KEY
+)
+from tws_bot.notifications.pushover import PushoverNotifier
+from tws_bot.data.database import DatabaseManager
+from tws_bot.core.signals import check_entry_signal, check_exit_signal
+from tws_bot.core.indicators import calculate_indicators
+from tws_bot.core.indicators import calculate_indicators
+from tws_bot.api.tws_connector import TWSConnector
 
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
+    level=getattr(logging, LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(config.LOG_FILE),
+        logging.FileHandler(LOG_FILE),
         logging.StreamHandler()
     ]
 )
@@ -32,7 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class SignalService(EWrapper, EClient):
+class SignalService(TWSConnector):
     def check_long_put_filters(self, symbol: str) -> dict:
         """Prüft alle LONG PUT Filter für ein Symbol."""
         result = {}
@@ -47,14 +53,14 @@ class SignalService(EWrapper, EClient):
             avg_vol_val = float(fund.get('avg_volume', 0)) if fund else 0.0
         except Exception:
             avg_vol_val = 0.0
-        result['market_cap'] = market_cap_val >= config.MIN_MARKET_CAP
-        result['avg_volume'] = avg_vol_val >= config.MIN_AVG_VOLUME
+        result['market_cap'] = market_cap_val >= MIN_MARKET_CAP
+        result['avg_volume'] = avg_vol_val >= MIN_AVG_VOLUME
         # PE Ratio Branchenvergleich (Dummy: vergleiche numerisch)
         try:
             pe_val = float(fund.get('pe_ratio', 0)) if fund else 0.0
         except Exception:
             pe_val = 0.0
-        result['pe_ratio_mult'] = pe_val > config.PUT_PE_RATIO_MULTIPLIER * 10  # TODO: Branchen-Median
+        result['pe_ratio_mult'] = pe_val > PUT_PE_RATIO_MULTIPLIER * 10  # TODO: Branchen-Median
         # IV Rank (echt)
         iv_df = self.db.get_iv_history(symbol, days=252)
         iv_rank = None
@@ -64,7 +70,7 @@ class SignalService(EWrapper, EClient):
             iv_max = iv_df['implied_vol'].max()
             if iv_max > iv_min:
                 iv_rank = 100 * (current_iv - iv_min) / (iv_max - iv_min)
-        result['iv_rank'] = iv_rank is not None and iv_rank >= config.PUT_MIN_IV_RANK
+        result['iv_rank'] = iv_rank is not None and iv_rank >= PUT_MIN_IV_RANK
         # DTE (Dummy: immer True, da keine Optionsdaten)
         result['dte'] = True  # TODO: DTE aus options_positions
         # Nähe zum Hoch (Dummy: immer True, da keine Kursdaten)
@@ -79,7 +85,7 @@ class SignalService(EWrapper, EClient):
             fcf_val = float(fund.get('fcf', 0)) if fund and fund.get('fcf') is not None else 0.0
         except Exception:
             fcf_val = 0.0
-        result['fcf_yield'] = fcf_val > config.CALL_MIN_FCF_YIELD
+        result['fcf_yield'] = fcf_val > CALL_MIN_FCF_YIELD
         try:
             market_cap_val = float(fund.get('market_cap', 0)) if fund else 0.0
         except Exception:
@@ -88,8 +94,8 @@ class SignalService(EWrapper, EClient):
             avg_vol_val = float(fund.get('avg_volume', 0)) if fund else 0.0
         except Exception:
             avg_vol_val = 0.0
-        result['market_cap'] = market_cap_val >= config.MIN_MARKET_CAP
-        result['avg_volume'] = avg_vol_val >= config.MIN_AVG_VOLUME
+        result['market_cap'] = market_cap_val >= MIN_MARKET_CAP
+        result['avg_volume'] = avg_vol_val >= MIN_AVG_VOLUME
         # IV Rank (echt)
         iv_df = self.db.get_iv_history(symbol, days=252)
         iv_rank = None
@@ -99,7 +105,7 @@ class SignalService(EWrapper, EClient):
             iv_max = iv_df['implied_vol'].max()
             if iv_max > iv_min:
                 iv_rank = 100 * (current_iv - iv_min) / (iv_max - iv_min)
-        result['iv_rank'] = iv_rank is not None and iv_rank <= config.CALL_MAX_IV_RANK
+        result['iv_rank'] = iv_rank is not None and iv_rank <= CALL_MAX_IV_RANK
         # DTE (Dummy)
         result['dte'] = True  # TODO
         # Nähe zum Tief (Dummy)
@@ -121,14 +127,14 @@ class SignalService(EWrapper, EClient):
             avg_vol_val = float(fund.get('avg_volume', 0)) if fund else 0.0
         except Exception:
             avg_vol_val = 0.0
-        result['market_cap'] = market_cap_val >= config.MIN_MARKET_CAP
-        result['avg_volume'] = avg_vol_val >= config.MIN_AVG_VOLUME
+        result['market_cap'] = market_cap_val >= MIN_MARKET_CAP
+        result['avg_volume'] = avg_vol_val >= MIN_AVG_VOLUME
         # PE Ratio Branchenvergleich (Dummy)
         try:
             pe_val = float(fund.get('pe_ratio', 0)) if fund else 0.0
         except Exception:
             pe_val = 0.0
-        result['pe_ratio_mult'] = pe_val > config.SPREAD_PE_RATIO_MULTIPLIER * 10  # TODO
+        result['pe_ratio_mult'] = pe_val > SPREAD_PE_RATIO_MULTIPLIER * 10  # TODO
         # IV Rank (echt)
         iv_df = self.db.get_iv_history(symbol, days=252)
         iv_rank = None
@@ -138,7 +144,7 @@ class SignalService(EWrapper, EClient):
             iv_max = iv_df['implied_vol'].max()
             if iv_max > iv_min:
                 iv_rank = 100 * (current_iv - iv_min) / (iv_max - iv_min)
-        result['iv_rank'] = iv_rank is not None and iv_rank >= config.SPREAD_MIN_IV_RANK
+        result['iv_rank'] = iv_rank is not None and iv_rank >= SPREAD_MIN_IV_RANK
         # DTE (Dummy)
         result['dte'] = True  # TODO
         # Delta (Dummy)
@@ -210,34 +216,34 @@ class SignalService(EWrapper, EClient):
         logger.info(f"[OK] {symbol}: Fundamentaldaten geladen")
         self.pending_requests[reqId]['completed'] = True
     
-    def __init__(self, host: str = config.IB_HOST, port: int = config.IB_PORT, 
-                 client_id: int = config.IB_CLIENT_ID):
-        EClient.__init__(self, self)
-        EWrapper.__init__(self)
-        
-        self.host = host
-        self.port = port
-        self.client_id = client_id
+    def __init__(self):
+        TWSConnector.__init__(self)
         
         self.db = DatabaseManager()
         self.notifier = PushoverNotifier()
         
-        self.connected = False
-        self.next_valid_order_id = None
         self.historical_data_cache: Dict[str, pd.DataFrame] = {}
-        self.pending_requests: Dict[int, Dict] = {}
-        self.request_id_counter = 0
         
         # Aktive Positionen (Tracking für Exit-Signale)
         self.active_positions: Dict[str, Dict] = {}
         
         # Watchlist direkt aus Config
-        self.watchlist = config.WATCHLIST_STOCKS
+        self.watchlist = WATCHLIST_STOCKS
         
         self.running = False
         
-        logger.info(f"Signal Service initialisiert: {host}:{port} (Client ID: {client_id})")
+        logger.info(f"Signal Service initialisiert: {self.host}:{self.port} (Client ID: {self.client_id})")
         logger.info(f"Watchlist: {', '.join(self.watchlist)}")
+
+        # Monitoring-Metriken
+        self.metrics = {
+            'start_time': datetime.now(),
+            'scans_completed': 0,
+            'signals_generated': 0,
+            'errors_encountered': 0,
+            'last_health_check': None,
+            'connection_drops': 0
+        }
     
     # ========================================================================
     # TWS CALLBACKS
@@ -394,185 +400,6 @@ class SignalService(EWrapper, EClient):
     # SIGNAL GENERIERUNG
     # ========================================================================
     
-    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Berechnet technische Indikatoren.
-        
-        Args:
-            df: DataFrame mit OHLCV Daten
-            
-        Returns:
-            DataFrame mit Indikatoren
-        """
-        df = df.copy()
-        
-        # Moving Averages
-        df['ma_short'] = df['close'].rolling(window=config.MA_SHORT_PERIOD).mean()
-        df['ma_long'] = df['close'].rolling(window=config.MA_LONG_PERIOD).mean()
-        
-        # RSI
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=config.RSI_PERIOD).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=config.RSI_PERIOD).mean()
-        rs = gain / loss
-        df['rsi'] = 100 - (100 / (1 + rs))
-        
-        # MACD
-        if config.USE_MACD:
-            exp1 = df['close'].ewm(span=config.MACD_FAST, adjust=False).mean()
-            exp2 = df['close'].ewm(span=config.MACD_SLOW, adjust=False).mean()
-            df['macd'] = exp1 - exp2
-            df['macd_signal'] = df['macd'].ewm(span=config.MACD_SIGNAL, adjust=False).mean()
-        
-        return df
-    
-    def check_entry_signal(self, symbol: str, df: pd.DataFrame) -> Optional[Dict]:
-        """
-        Prüft Entry-Signal Bedingungen.
-        
-        Args:
-            symbol: Ticker Symbol
-            df: DataFrame mit Indikatoren
-            
-        Returns:
-            Signal-Dict oder None
-        """
-        if len(df) < config.MA_LONG_PERIOD + 1:
-            return None
-        
-        current = df.iloc[-1]
-        previous = df.iloc[-2]
-        
-        signals = []
-        reasons = []
-        
-        # MA Crossover
-        if config.USE_MA_CROSSOVER:
-            if (previous['ma_short'] <= previous['ma_long'] and 
-                current['ma_short'] > current['ma_long']):
-                signals.append(True)
-                reasons.append("MA Crossover")
-            else:
-                signals.append(False)
-        
-        # RSI Oversold
-        if config.USE_RSI:
-            if current['rsi'] < config.RSI_OVERSOLD:
-                signals.append(True)
-                reasons.append(f"RSI {current['rsi']:.1f} < {config.RSI_OVERSOLD}")
-            else:
-                signals.append(False)
-        
-        # MACD Crossover
-        if config.USE_MACD:
-            if (previous['macd'] <= previous['macd_signal'] and
-                current['macd'] > current['macd_signal']):
-                signals.append(True)
-                reasons.append("MACD Crossover")
-            else:
-                signals.append(False)
-        
-        # Mindestanzahl Signale
-        signal_count = sum(signals)
-        
-        if signal_count >= config.MIN_SIGNALS_FOR_ENTRY:
-            price = current['close']
-            stop_loss = price * (1 - config.STOP_LOSS_PCT)
-            take_profit = price * (1 + config.TAKE_PROFIT_PCT)
-            
-            # Position Size berechnen
-            risk_amount = config.ACCOUNT_SIZE * config.MAX_RISK_PER_TRADE_PCT
-            stop_distance = price - stop_loss
-            quantity = int(risk_amount / stop_distance)
-            
-            if quantity * price < config.MIN_POSITION_SIZE:
-                return None
-            
-            return {
-                'type': 'ENTRY',
-                'symbol': symbol,
-                'price': price,
-                'quantity': quantity,
-                'stop_loss': stop_loss,
-                'take_profit': take_profit,
-                'reason': " + ".join(reasons),
-                'timestamp': datetime.now()
-            }
-        
-        return None
-    
-    def check_exit_signal(self, symbol: str, position: Dict, df: pd.DataFrame) -> Optional[Dict]:
-        """
-        Prüft Exit-Signal Bedingungen für bestehende Position.
-        
-        Args:
-            symbol: Ticker Symbol
-            position: Position Dict
-            df: DataFrame mit Indikatoren
-            
-        Returns:
-            Signal-Dict oder None
-        """
-        if len(df) == 0:
-            return None
-        
-        current = df.iloc[-1]
-        current_price = current['close']
-        entry_price = position['entry_price']
-        
-        # Stop Loss
-        if current_price <= position['stop_loss']:
-            pnl = (current_price - entry_price) * position['quantity']
-            pnl_pct = ((current_price / entry_price) - 1) * 100
-            
-            return {
-                'type': 'EXIT',
-                'symbol': symbol,
-                'price': current_price,
-                'quantity': position['quantity'],
-                'entry_price': entry_price,
-                'pnl': pnl,
-                'pnl_pct': pnl_pct,
-                'reason': '[STOP LOSS] Stop Loss erreicht',
-                'timestamp': datetime.now()
-            }
-        
-        # Take Profit
-        if current_price >= position['take_profit']:
-            pnl = (current_price - entry_price) * position['quantity']
-            pnl_pct = ((current_price / entry_price) - 1) * 100
-            
-            return {
-                'type': 'EXIT',
-                'symbol': symbol,
-                'price': current_price,
-                'quantity': position['quantity'],
-                'entry_price': entry_price,
-                'pnl': pnl,
-                'pnl_pct': pnl_pct,
-                'reason': '[TAKE PROFIT] Take Profit erreicht',
-                'timestamp': datetime.now()
-            }
-        
-        # RSI Overbought (für Long-Positionen)
-        if config.USE_RSI and current['rsi'] > config.RSI_OVERBOUGHT:
-            pnl = (current_price - entry_price) * position['quantity']
-            pnl_pct = ((current_price / entry_price) - 1) * 100
-            
-            return {
-                'type': 'EXIT',
-                'symbol': symbol,
-                'price': current_price,
-                'quantity': position['quantity'],
-                'entry_price': entry_price,
-                'pnl': pnl,
-                'pnl_pct': pnl_pct,
-                'reason': f'RSI Overbought ({current["rsi"]:.1f})',
-                'timestamp': datetime.now()
-            }
-        
-        return None
-    
     def process_signal(self, signal: Dict):
         """
         Verarbeitet und sendet Trading Signal.
@@ -682,7 +509,7 @@ class SignalService(EWrapper, EClient):
                 # --- Historische Daten prüfen/laden ---
                 if symbol not in self.historical_data_cache:
                     # Versuche aus DB zu laden
-                    df_hist = self.db.load_historical_data(symbol, days=config.HISTORY_DAYS)
+                    df_hist = self.db.load_historical_data(symbol, days=HISTORY_DAYS)
                     if not df_hist.empty:
                         self.historical_data_cache[symbol] = df_hist
                         logger.info(f"[CACHE] Historische Daten für {symbol} aus DB geladen.")
@@ -691,7 +518,7 @@ class SignalService(EWrapper, EClient):
                 needs_update = self.db.needs_update(symbol, max_age_days=1)
                 if symbol not in self.historical_data_cache or needs_update:
                     logger.info(f"Lade neue historische Daten für {symbol}...")
-                    req_id = self.request_historical_data(symbol, config.HISTORY_DAYS)
+                    req_id = self.request_historical_data(symbol, HISTORY_DAYS)
                     self.wait_for_request(req_id, timeout=30)
 
                 if symbol not in self.historical_data_cache:
@@ -703,16 +530,17 @@ class SignalService(EWrapper, EClient):
                     continue
 
                 # Berechne Indikatoren
-                df = self.calculate_indicators(df)
+                df = calculate_indicators(df)
                 self.historical_data_cache[symbol] = df
 
                 current_price = df.iloc[-1]['close']
 
                 # Prüfe Exit-Signale für aktive Positionen
                 if symbol in self.active_positions:
-                    exit_signal = self.check_exit_signal(symbol, self.active_positions[symbol], df)
+                    exit_signal = check_exit_signal(symbol, df, self.active_positions[symbol])
                     if exit_signal:
                         self.process_signal(exit_signal)
+                        self.metrics['signals_generated'] += 1
                         continue
 
                     # Position Status
@@ -725,9 +553,10 @@ class SignalService(EWrapper, EClient):
                                 f"TP: ${position['take_profit']:.2f}")
                 else:
                     # Prüfe Entry-Signale (nur wenn keine Position)
-                    entry_signal = self.check_entry_signal(symbol, df)
+                    entry_signal = check_entry_signal(symbol, df, self)
                     if entry_signal:
                         self.process_signal(entry_signal)
+                        self.metrics['signals_generated'] += 1
                     else:
                         # Status ohne Signal
                         rsi = df.iloc[-1]['rsi']
@@ -741,39 +570,174 @@ class SignalService(EWrapper, EClient):
                 logger.error(f"[FEHLER] Fehler bei {symbol}: {e}", exc_info=True)
 
         logger.info(f"\nAktive Positionen: {len(self.active_positions)}")
-        logger.info(f"\nNaechster Scan in {config.SCAN_INTERVAL}s")
+        logger.info(f"\nNaechster Scan in {SCAN_INTERVAL}s")
     
     # ========================================================================
     # HAUPTSCHLEIFE
     # ========================================================================
-    
+
+    def perform_health_check(self) -> dict:
+        """
+        Führt umfassenden Health-Check durch.
+
+        Returns:
+            Dictionary mit Health-Status
+        """
+        health = {
+            'timestamp': datetime.now(),
+            'overall_status': 'unknown',
+            'checks': {}
+        }
+
+        try:
+            # TWS-Verbindung prüfen
+            health['checks']['tws_connection'] = {
+                'status': 'healthy' if self.connected else 'unhealthy',
+                'details': f"Connected: {self.connected}"
+            }
+
+            # Datenbank prüfen
+            db_health = self.db.health_check()
+            health['checks']['database'] = {
+                'status': db_health['status'],
+                'details': f"Connection: {db_health['connection']}, Tables: {db_health['tables_exist']}"
+            }
+
+            # Cache prüfen
+            cache_size = len(self.historical_data_cache)
+            health['checks']['cache'] = {
+                'status': 'healthy' if cache_size > 0 else 'warning',
+                'details': f"Symbols cached: {cache_size}"
+            }
+
+            # Positionen prüfen
+            positions_count = len(self.active_positions)
+            health['checks']['positions'] = {
+                'status': 'healthy',
+                'details': f"Active positions: {positions_count}"
+            }
+
+            # Metriken prüfen
+            uptime = (datetime.now() - self.metrics['start_time']).total_seconds()
+            health['checks']['metrics'] = {
+                'status': 'healthy',
+                'details': f"Uptime: {uptime:.0f}s, Scans: {self.metrics['scans_completed']}, Signals: {self.metrics['signals_generated']}"
+            }
+
+            # Gesamtstatus bestimmen
+            statuses = [check['status'] for check in health['checks'].values()]
+            if all(status == 'healthy' for status in statuses):
+                health['overall_status'] = 'healthy'
+            elif 'unhealthy' in statuses:
+                health['overall_status'] = 'unhealthy'
+            else:
+                health['overall_status'] = 'degraded'
+
+            self.metrics['last_health_check'] = health
+
+        except Exception as e:
+            logger.error(f"[HEALTH] Health-Check Fehler: {e}")
+            health['overall_status'] = 'error'
+            health['error'] = str(e)
+
+        return health
+
+    def log_health_status(self):
+        """Loggt aktuellen Health-Status."""
+        health = self.perform_health_check()
+
+        status_icon = {
+            'healthy': '🟢',
+            'degraded': '🟡',
+            'unhealthy': '🔴',
+            'error': '❌',
+            'unknown': '❓'
+        }.get(health['overall_status'], '❓')
+
+        logger.info(f"[HEALTH] {status_icon} System Status: {health['overall_status'].upper()}")
+
+        for check_name, check_data in health['checks'].items():
+            icon = {'healthy': '✅', 'warning': '⚠️', 'unhealthy': '❌'}.get(check_data['status'], '❓')
+            logger.info(f"[HEALTH] {icon} {check_name}: {check_data['details']}")
+
     def run_service(self):
-        """Startet den Signal Service."""
+        """Startet den Signal Service mit robuster Fehlerbehandlung."""
         self.running = True
-        
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        error_backoff_time = 60  # Start mit 60 Sekunden
+
         logger.info("\n" + "="*70)
         logger.info("  SIGNAL SERVICE GESTARTET")
         logger.info("="*70)
         logger.info(f"Watchlist: {', '.join(self.watchlist)}")
-        logger.info(f"Scan-Intervall: {config.SCAN_INTERVAL}s")
-        logger.info(f"Signal-Only Mode: {'Ja' if config.SIGNAL_ONLY_MODE else 'Nein'}")
+        logger.info(f"Scan-Intervall: {SCAN_INTERVAL}s")
+        logger.info(f"Signal-Only Mode: {'Ja' if SIGNAL_ONLY_MODE else 'Nein'}")
         logger.info("="*70 + "\n")
-        
+
         # Initial Scan
-        self.scan_for_signals()
-        
-        # Hauptschleife
+        try:
+            self.scan_for_signals()
+            self.metrics['scans_completed'] += 1
+            consecutive_errors = 0  # Reset bei erfolgreichem Scan
+        except Exception as e:
+            logger.error(f"[FEHLER] Initialer Scan fehlgeschlagen: {e}", exc_info=True)
+            self.metrics['errors_encountered'] += 1
+            consecutive_errors += 1
+
+        # Health-Check Timer
+        last_health_check = time.time()
+        health_check_interval = 300  # Alle 5 Minuten
+
+        # Hauptschleife mit robuster Fehlerbehandlung
         while self.running:
             try:
-                time.sleep(config.SCAN_INTERVAL)
+                # Regelmäßiger Health-Check
+                current_time = time.time()
+                if current_time - last_health_check > health_check_interval:
+                    self.log_health_status()
+                    last_health_check = current_time
+
+                # Normaler Scan
+                time.sleep(SCAN_INTERVAL)
                 self.scan_for_signals()
-                
+                self.metrics['scans_completed'] += 1
+
+                # Erfolg - Reset Fehler-Counter
+                consecutive_errors = 0
+                error_backoff_time = 60  # Reset Backoff
+
             except KeyboardInterrupt:
                 logger.info("\n[WARNUNG] Shutdown Signal empfangen...")
                 break
+
+            except ConnectionError as e:
+                consecutive_errors += 1
+                self.metrics['errors_encountered'] += 1
+                error_backoff_time = min(error_backoff_time * 1.5, 300)  # Max 5 Minuten
+                logger.error(f"[FEHLER] Verbindungsfehler #{consecutive_errors}: {e}")
+                logger.info(f"[BACKOFF] Warte {error_backoff_time:.0f}s vor nächstem Versuch...")
+
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.critical(f"[CRITICAL] {max_consecutive_errors} aufeinanderfolgende Fehler - Service stoppt")
+                    self.running = False
+                    break
+
+                time.sleep(error_backoff_time)
+
             except Exception as e:
-                logger.error(f"[FEHLER] Fehler im Scanner: {e}", exc_info=True)
-                time.sleep(60)
+                consecutive_errors += 1
+                self.metrics['errors_encountered'] += 1
+                error_backoff_time = min(error_backoff_time * 1.5, 300)
+                logger.error(f"[FEHLER] Unerwarteter Fehler #{consecutive_errors}: {e}", exc_info=True)
+
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.critical(f"[CRITICAL] {max_consecutive_errors} aufeinanderfolgende Fehler - Service stoppt")
+                    self.running = False
+                    break
+
+                logger.info(f"[BACKOFF] Warte {error_backoff_time:.0f}s vor nächstem Versuch...")
+                time.sleep(error_backoff_time)
     
     def stop_service(self):
         """Stoppt den Service."""
@@ -804,9 +768,9 @@ def main():
     print("\n" + "="*70)
     print("  TWS TRADING SIGNAL SERVICE")
     print("="*70)
-    print(f"  TWS: {config.IB_HOST}:{config.IB_PORT}")
-    print(f"  Modus: {'PAPER' if config.IS_PAPER_TRADING else 'LIVE'}")
-    print(f"  Pushover: {'Aktiv' if config.PUSHOVER_USER_KEY else 'Inaktiv'}")
+    print(f"  TWS: {IB_HOST}:{IB_PORT}")
+    print(f"  Modus: {'PAPER' if IS_PAPER_TRADING else 'LIVE'}")
+    print(f"  Pushover: {'Aktiv' if PUSHOVER_USER_KEY else 'Inaktiv'}")
     print("="*70 + "\n")
     
     try:
@@ -814,7 +778,7 @@ def main():
         service_instance = service
         
         # Test Pushover
-        if config.PUSHOVER_USER_KEY:
+        if PUSHOVER_USER_KEY:
             logger.info("Teste Pushover Verbindung...")
             service.notifier.test_notification()
         

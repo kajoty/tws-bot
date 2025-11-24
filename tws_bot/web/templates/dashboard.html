@@ -23,6 +23,10 @@
         .chart-link { color: #007bff; text-decoration: none; }
         .chart-link:hover { text-decoration: underline; }
         .indicators { font-size: 0.9em; color: #666; }
+        .pagination { text-align: center; margin: 20px 0; }
+        .positive { color: green; font-weight: bold; }
+        .negative { color: red; font-weight: bold; }
+        .watchlist { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin: 20px 0; }
     </style>
 </head>
 <body>
@@ -46,6 +50,26 @@
             <div class="stat-box">
                 <h3>Historische Signale</h3>
                 <p>{{ historical_signals|length }}</p>
+            </div>
+            <div class="stat-box">
+                <h3>Performance Win-Rate</h3>
+                <p>{{ "%.1f"|format(performance_stats.win_rate) }}%</p>
+            </div>
+            <div class="stat-box">
+                <h3>Gesamt Signale</h3>
+                <p>{{ performance_stats.total_signals }}</p>
+            </div>
+            <div class="stat-box">
+                <h3>Options-Signale</h3>
+                <p>{{ options_signals|length }}</p>
+            </div>
+            <div class="stat-box">
+                <h3>Ø IV Rank</h3>
+                <p>{{ "%.1f"|format(options_stats.avg_iv_rank) }}</p>
+            </div>
+            <div class="stat-box">
+                <h3>Ø Proximity</h3>
+                <p>{{ "%.1f"|format(options_stats.avg_proximity_pct) }}%</p>
             </div>
         </div>
 
@@ -99,7 +123,7 @@
                             <td>${{ "%.2f"|format(entry.current.price) }}</td>
                             <td>{{ "%.1f"|format(entry.current.rsi) }}</td>
                             <td>{{ "%.2f"|format(entry.current.ma_short) }} / {{ "%.2f"|format(entry.current.ma_long) }}</td>
-                            <td>{{ "%.4f"|format(entry.current.macd) }}</td>
+                            <td>{% if entry.current.macd is defined %}{{ "%.4f"|format(entry.current.macd) }}{% else %}-{% endif %}</td>
                             <td><a href="/chart/{{ entry.symbol }}" class="chart-link">Anzeigen</a></td>
                         </tr>
                     {% endfor %}
@@ -134,9 +158,86 @@
             <p>Keine historischen Signale gefunden.</p>
         {% endif %}
 
+        <!-- Options-Signale -->
+        <h2>Options-Signale</h2>
+        {% if options_signals %}
+            <table>
+                <tr>
+                    <th>Zeitstempel</th>
+                    <th>Strategie</th>
+                    <th>Ticker</th>
+                    <th>Underlying</th>
+                    <th>Strike</th>
+                    <th>Expiry</th>
+                    <th>DTE</th>
+                    <th>IV Rank</th>
+                    <th>Proximity</th>
+                    <th>Grund</th>
+                </tr>
+                {% for signal in options_signals %}
+                    <tr>
+                        <td>{{ signal.timestamp.strftime('%Y-%m-%d %H:%M') if signal.timestamp else 'N/A' }}</td>
+                        <td><strong>{{ signal.signal_type }}</strong></td>
+                        <td>{{ signal.symbol }}</td>
+                        <td>${{ "%.2f"|format(signal.underlying_price) }}</td>
+                        <td>${{ "%.2f"|format(signal.recommended_strike) if signal.recommended_strike else 'N/A' }}</td>
+                        <td>{{ signal.recommended_expiry if signal.recommended_expiry else 'N/A' }}</td>
+                        <td>{{ signal.recommended_dte if signal.recommended_dte else 'N/A' }}</td>
+                        <td>{{ "%.1f"|format(signal.iv_rank) if signal.iv_rank else 'N/A' }}</td>
+                        <td>{{ "%.1f"|format(signal.proximity_pct) if signal.proximity_pct else 'N/A' }}%</td>
+                        <td>{{ signal.reason if signal.reason else 'N/A' }}</td>
+                    </tr>
+                {% endfor %}
+            </table>
+        {% else %}
+            <p>Keine Options-Signale gefunden.</p>
+        {% endif %}
+
+        <!-- Marktübersicht -->
+        <h2>Marktübersicht</h2>
+        {% if market_overview %}
+            <div class="pagination">
+                <p>Seite {{ current_page }} von {{ total_pages }} ({{ per_page }} pro Seite)</p>
+                {% if current_page > 1 %}
+                    <a href="?page={{ current_page - 1 }}&per_page={{ per_page }}" class="filter-btn">Vorherige</a>
+                {% endif %}
+                {% if current_page < total_pages %}
+                    <a href="?page={{ current_page + 1 }}&per_page={{ per_page }}" class="filter-btn">Nächste</a>
+                {% endif %}
+            </div>
+            <table>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Preis</th>
+                    <th>Änderung (%)</th>
+                    <th>RSI</th>
+                    <th>MA Kurz/Lang</th>
+                    <th>ATR</th>
+                    <th>Volume</th>
+                    <th>Chart</th>
+                </tr>
+                {% for stock in market_overview %}
+                    <tr>
+                        <td><strong>{{ stock.symbol }}</strong></td>
+                        <td>${{ "%.2f"|format(stock.price) }}</td>
+                        <td class="{% if stock.change > 0 %}positive{% else %}negative{% endif %}">
+                            {{ "%.2f"|format(stock.change) }}%
+                        </td>
+                        <td>{{ "%.1f"|format(stock.rsi) }}</td>
+                        <td>{{ "%.2f"|format(stock.ma_short) }} / {{ "%.2f"|format(stock.ma_long) }}</td>
+                        <td>{{ "%.4f"|format(stock.atr) }}</td>
+                        <td>{{ "{:,}".format(stock.volume) }}</td>
+                        <td><a href="/chart/{{ stock.symbol }}" class="chart-link">Anzeigen</a></td>
+                    </tr>
+                {% endfor %}
+            </table>
+        {% else %}
+            <p>Keine Marktübersicht verfügbar.</p>
+        {% endif %}
+
         <!-- Watchlist -->
         <div class="watchlist">
-            <h2>Watchlist (erste 10)</h2>
+            <h2>Watchlist (erste 20)</h2>
             <ul>
                 {% for stock in watchlist %}
                     <li><a href="/chart/{{ stock }}" class="chart-link">{{ stock }}</a></li>
