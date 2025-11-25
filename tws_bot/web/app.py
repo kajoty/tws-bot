@@ -99,7 +99,7 @@ def get_market_overview():
     """Erstelle Marktübersicht für alle Watchlist-Symbole"""
     overview = []
     try:
-        for symbol in WATCHLIST_STOCKS[:100]:  # Erhöht auf 100 für bessere Übersicht
+        for symbol in WATCHLIST_STOCKS:  # Alle verfügbaren Ticker
             try:
                 df = db.load_historical_data(symbol)
                 if df is None or df.empty:
@@ -277,8 +277,8 @@ def dashboard():
                                  timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                                  show_details=True)
 
-        # Verarbeite Watchlist-Symbole
-        for symbol in watchlist[:50]:  # Erhöht auf 50 für bessere Statistik
+        # Verarbeite ALLE Watchlist-Symbole (vollständige Abdeckung)
+        for symbol in watchlist:  # Alle 425 Ticker verarbeiten
             try:
                 # Lade historische Daten
                 df = db.load_historical_data(symbol)

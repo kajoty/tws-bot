@@ -142,26 +142,32 @@ class OptionsScanner(EWrapper, EClient):
     
     def _load_earnings_data_smart(self) -> Dict[str, Dict]:
         """
-        Intelligentes Laden von Earnings-Daten mit Rate-Limit-Management.
+        Intelligentes Laden von Earnings-Daten mit Bulk-API-Call.
         
         Strategie:
-        1. Portfolio-Symbole immer laden (für Covered Calls kritisch)
-        2. Zusätzliche Watchlist-Symbole laden bis Rate-Limit erreicht
-        3. Rest mit Simulation auffüllen
+        1. Einmalig alle Earnings-Daten von Alpha Vantage laden (falls nicht schon getan)
+        2. Alle benötigten Symbole aus Datenbank holen
+        3. Fehlende Symbole mit Simulation auffüllen
         
         Returns:
             Dict mit Symbol -> earnings data
         """
         earnings_data = {}
         
-        # 1. Portfolio-Symbole immer laden (Priorität!)
-        portfolio_symbols = list(self.portfolio_data.keys())
-        logger.info(f"Lade Earnings-Daten für {len(portfolio_symbols)} Portfolio-Symbole (Priorität)...")
+        # 1. Bulk-Earnings-Kalender laden (falls noch nicht getan oder alt)
+        bulk_loaded = self._load_earnings_calendar_bulk()
         
-        for symbol in portfolio_symbols:
-            earnings_info = self._fetch_alpha_vantage_earnings(symbol)
-            if earnings_info and earnings_info.get('earnings_date'):
-                earnings_date = earnings_info['earnings_date']
+        # 2. Alle benötigten Symbole aus Datenbank holen
+        all_symbols = list(set(self.portfolio_data.keys()) | set(self.watchlist))
+        
+        logger.info(f"Lade Earnings-Daten für {len(all_symbols)} Symbole aus Datenbank...")
+        
+        for symbol in all_symbols:
+            # Versuche Daten aus DB zu holen
+            cached_data = self.db.get_earnings_date(symbol)
+            
+            if cached_data and cached_data.get('earnings_date'):
+                earnings_date = cached_data['earnings_date']
                 days_until = (earnings_date - datetime.now()).days
                 is_earnings_week = days_until <= 7 and days_until >= -1
                 
@@ -169,51 +175,18 @@ class OptionsScanner(EWrapper, EClient):
                     'earnings_date': earnings_date,
                     'days_until': days_until,
                     'is_earnings_week': is_earnings_week,
-                    'status': earnings_info.get('source', 'alpha_vantage')
+                    'status': 'cached' if bulk_loaded else 'alpha_vantage'
                 }
             else:
-                earnings_data[symbol] = self._simulate_earnings_date(symbol)
-        
-        # 2. Zusätzliche Watchlist-Symbole laden (bis Rate-Limit erreicht)
-        remaining_watchlist = [s for s in self.watchlist if s not in earnings_data]
-        max_additional_calls = 20  # Sicherheitsreserve unter 25/Tag
-        
-        if remaining_watchlist:
-            calls_used = len([s for s in earnings_data.values() if s.get('status') in ['alpha_vantage', 'cached']])
-            calls_available = max(0, max_additional_calls - calls_used)
-            
-            if calls_available > 0:
-                symbols_to_load = remaining_watchlist[:calls_available]
-                logger.info(f"Lade Earnings-Daten für {len(symbols_to_load)} zusätzliche Watchlist-Symbole...")
-                
-                for symbol in symbols_to_load:
-                    earnings_info = self._fetch_alpha_vantage_earnings(symbol)
-                    if earnings_info and earnings_info.get('earnings_date'):
-                        earnings_date = earnings_info['earnings_date']
-                        days_until = (earnings_date - datetime.now()).days
-                        is_earnings_week = days_until <= 7 and days_until >= -1
-                        
-                        earnings_data[symbol] = {
-                            'earnings_date': earnings_date,
-                            'days_until': days_until,
-                            'is_earnings_week': is_earnings_week,
-                            'status': earnings_info.get('source', 'alpha_vantage')
-                        }
-                    else:
-                        earnings_data[symbol] = self._simulate_earnings_date(symbol)
-        
-        # 3. Rest mit Simulation auffüllen
-        for symbol in self.watchlist:
-            if symbol not in earnings_data:
+                # Fallback auf Simulation
                 earnings_data[symbol] = self._simulate_earnings_date(symbol)
         
         # Statistiken loggen
-        api_calls = len([s for s in earnings_data.values() if s.get('status') in ['alpha_vantage', 'cached']])
         cached = len([s for s in earnings_data.values() if s.get('status') == 'cached'])
         simulated = len([s for s in earnings_data.values() if s.get('status') in ['simulated', 'simulated_fallback']])
         
         logger.info(f"Earnings-Daten geladen: {len(earnings_data)} Symbole "
-                   f"({api_calls} API/Cached, {cached} gecached, {simulated} simuliert)")
+                   f"({cached} gecached, {simulated} simuliert)")
         
         return earnings_data
     
@@ -247,97 +220,84 @@ class OptionsScanner(EWrapper, EClient):
             # Fallback: Simuliere Earnings
             self.earnings_data[symbol] = self._simulate_earnings_date(symbol)
     
-    def _fetch_alpha_vantage_earnings(self, symbol: str) -> Optional[Dict]:
+    def _load_earnings_calendar_bulk(self) -> bool:
         """
-        Lädt Earnings-Daten von Alpha Vantage API mit intelligentem Caching.
+        Lädt alle erwarteten Earnings-Daten auf einmal von Alpha Vantage EARNINGS_CALENDAR.
         
-        WICHTIG: Alpha Vantage kostenloser Plan = nur 25 Calls/Tag!
-        Daher ist Caching entscheidend für die Rate-Limits.
+        Diese Methode macht einen einzigen API-Call für alle erwarteten Earnings
+        in den nächsten 12 Monaten und speichert sie in der Datenbank.
         
-        Args:
-            symbol: Ticker Symbol
-            
+        Wird nur einmal pro Tag ausgeführt (Cache-Check).
+        
         Returns:
-            Dict mit earnings_date oder None
+            True wenn erfolgreich, False bei Fehler
         """
         try:
-            # Zuerst prüfen, ob Daten bereits in DB gecached sind (max 7 Tage alt)
-            cached_data = self.db.get_earnings_date(symbol)
-            if cached_data:
-                earnings_date = cached_data['earnings_date']
-                logger.debug(f"[CACHE] {symbol}: Earnings-Daten aus Cache ({cached_data['last_updated'][:10]})")
-                return {
-                    'earnings_date': earnings_date,
-                    'source': 'cached'
-                }
+            # Prüfe, ob wir heute schon Bulk-Daten geladen haben
+            today = datetime.now().date()
+            cache_key = f"bulk_earnings_loaded_{today.isoformat()}"
+            
+            # Einfache In-Memory Cache-Prüfung (nicht perfekt, aber für diesen Zweck OK)
+            if hasattr(self, '_bulk_cache_date') and self._bulk_cache_date == today:
+                logger.debug("[CACHE] Bulk-Earnings-Daten bereits heute geladen")
+                return True
             
             import requests
+            import csv
+            import io
             
             # Alpha Vantage API Key aus Config laden
             api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
             if not api_key:
-                logger.debug(f"Alpha Vantage API Key nicht konfiguriert für {symbol}")
-                return None
+                logger.warning("Alpha Vantage API Key nicht konfiguriert - verwende Simulation")
+                return False
             
-            # Rate Limiting: 25 Calls/Tag = max 1 Call alle 57 Minuten!
-            # Da wir cachen, machen wir nur Calls für neue Daten
-            if hasattr(self, '_last_api_call'):
-                time_since_last = (datetime.now() - self._last_api_call).total_seconds()
-                min_interval = 60 * 57  # 57 Minuten zwischen Calls (25/Tag = 1 Call/57min)
-                if time_since_last < min_interval:
-                    logger.debug(f"[RATE LIMIT] {symbol}: Überspringe API-Call (letzter Call vor {time_since_last/60:.1f}min)")
-                    return None
+            logger.info("[API] Lade Earnings-Kalender für alle Symbole (12 Monate) von Alpha Vantage")
             
-            logger.info(f"[API] {symbol}: Lade Earnings-Daten von Alpha Vantage (kostenloser Plan: 25 Calls/Tag)")
+            # EARNINGS_CALENDAR für alle Symbole (ohne symbol Parameter)
+            url = f"https://www.alphavantage.co/query?function=EARNINGS_CALENDAR&horizon=12month&apikey={api_key}"
             
-            # Verwende EARNINGS Funktion statt EARNINGS_CALENDAR (bessere Datenverfügbarkeit)
-            url = f"https://www.alphavantage.co/query?function=EARNINGS&symbol={symbol}&apikey={api_key}"
-            
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, timeout=30)
             response.raise_for_status()
             
-            data = response.json()
-            self._last_api_call = datetime.now()  # Timestamp für Rate Limiting
+            # Parse CSV Response
+            csv_content = response.content.decode('utf-8')
             
-            # Prüfe auf Rate Limit Nachricht
-            if 'Note' in data and 'rate limit' in data['Note'].lower():
-                logger.warning(f"[RATE LIMIT] {symbol}: Alpha Vantage Rate-Limit erreicht - verwende Cache/Simulation")
-                return None
+            # Prüfe auf Fehlermeldungen
+            if 'Information' in csv_content or 'I,n,f,o,r,m,a' in csv_content:
+                logger.warning("[RATE LIMIT] Alpha Vantage Information Nachricht - Rate-Limit erreicht")
+                return False
             
-            # Parse quarterly earnings data
-            if 'quarterlyEarnings' in data and data['quarterlyEarnings']:
-                # Nimm das nächste zukünftige Earnings-Datum
-                future_earnings = []
-                now = datetime.now()
+            csv_reader = csv.DictReader(io.StringIO(csv_content))
+            
+            earnings_count = 0
+            now = datetime.now()
+            
+            for row in csv_reader:
+                symbol = row.get('symbol', '').strip()
+                report_date_str = row.get('reportDate', '')
                 
-                for earning in data['quarterlyEarnings']:
-                    if 'reportedDate' in earning:
-                        try:
-                            reported_date = datetime.fromisoformat(earning['reportedDate'].replace('Z', '+00:00'))
-                            if reported_date > now:
-                                future_earnings.append(reported_date)
-                        except:
-                            continue
-                
-                if future_earnings:
-                    # Nächstes Earnings-Datum
-                    next_earnings = min(future_earnings)
-                    
-                    # Speichere in DB für Caching
-                    self.db.save_earnings_date(symbol, next_earnings)
-                    
-                    logger.info(f"[API] {symbol}: Nächste Earnings am {next_earnings.date()}")
-                    return {
-                        'earnings_date': next_earnings,
-                        'source': 'alpha_vantage'
-                    }
+                if symbol and report_date_str:
+                    try:
+                        report_date = datetime.strptime(report_date_str, '%Y-%m-%d')
+                        
+                        # Nur zukünftige Earnings speichern
+                        if report_date > now:
+                            self.db.save_earnings_date(symbol, report_date)
+                            earnings_count += 1
+                            
+                    except ValueError:
+                        continue
             
-            logger.debug(f"[API] {symbol}: Keine zukünftigen Earnings-Daten gefunden")
-            return None
+            # Cache-Flag setzen
+            self._bulk_cache_date = today
+            
+            logger.info(f"[OK] {earnings_count} zukünftige Earnings-Daten gespeichert")
+            return True
             
         except Exception as e:
-            logger.debug(f"Alpha Vantage API Fehler für {symbol}: {e}")
-            return None
+            logger.error(f"[FEHLER] Fehler beim Laden des Earnings-Kalenders: {e}")
+            return False
     
     def _simulate_earnings_date(self, symbol: str) -> Dict:
         """
