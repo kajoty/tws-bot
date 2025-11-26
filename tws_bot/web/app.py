@@ -14,20 +14,31 @@ import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
 import json
 from datetime import datetime
+from flask_caching import Cache
+import time
 
 # Import OptionsScanner lazy (vermeidet zirkuläre Imports)
 _options_scanner = None
+_scanner_last_init = 0
+SCANNER_CACHE_TIMEOUT = 300  # 5 Minuten Cache für Scanner
 
 def get_options_scanner():
-    """Lazy loading des OptionsScanner."""
-    global _options_scanner
-    if _options_scanner is None:
+    """Lazy loading des OptionsScanner mit Caching."""
+    global _options_scanner, _scanner_last_init
+    current_time = time.time()
+
+    # Prüfe ob Scanner noch gültig ist
+    if _options_scanner is None or (current_time - _scanner_last_init) > SCANNER_CACHE_TIMEOUT:
+        logger.info("Initialisiere OptionsScanner Cache...")
         import sys
         import os
         sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         from options_scanner import OptionsScanner
         _options_scanner = OptionsScanner()
         _options_scanner.connect_to_tws()  # Verbindung herstellen für fundamentale Daten
+        _scanner_last_init = current_time
+        logger.info("OptionsScanner Cache initialisiert")
+
     return _options_scanner
 
 app = Flask(__name__, template_folder='templates')
@@ -35,6 +46,31 @@ app = Flask(__name__, template_folder='templates')
 # Logger konfigurieren
 logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Cache konfigurieren
+cache_config = {
+    'CACHE_TYPE': 'SimpleCache',  # Fallback auf In-Memory Cache
+    'CACHE_DEFAULT_TIMEOUT': 300  # 5 Minuten Default
+}
+
+# Versuche Redis zu verwenden falls verfügbar
+try:
+    import redis
+    redis_client = redis.Redis(host='localhost', port=6379, db=0)
+    redis_client.ping()  # Test connection
+    cache_config.update({
+        'CACHE_TYPE': 'RedisCache',
+        'CACHE_REDIS_HOST': 'localhost',
+        'CACHE_REDIS_PORT': 6379,
+        'CACHE_REDIS_DB': 0
+    })
+    logger.info("Redis Cache aktiviert")
+except ImportError:
+    logger.info("Redis nicht installiert, verwende In-Memory Cache")
+except Exception as e:
+    logger.info(f"Redis nicht verfügbar ({e}), verwende In-Memory Cache")
+
+cache = Cache(app, config=cache_config)
 
 # Datenbank initialisieren
 db = DatabaseManager()
@@ -96,6 +132,7 @@ def calculate_position_size(price):
     take_profit = price * 1.04  # Beispiel: 4% Take-Profit
     return quantity, stop_loss, take_profit
 
+@cache.memoize(timeout=300)  # 5 Minuten Cache für historische Signale
 def get_historical_signals(limit=50):
     """Lade historische Signale aus DB"""
     try:
@@ -118,6 +155,7 @@ def get_historical_signals(limit=50):
         logger.error(f"Fehler beim Laden historischer Signale: {e}")
         return []
 
+@cache.memoize(timeout=600)  # 10 Minuten Cache für Marktübersicht
 def get_market_overview():
     """Erstelle Marktübersicht für alle Watchlist-Symbole"""
     overview = []
@@ -175,6 +213,7 @@ def get_market_overview():
     
     return overview
 
+@cache.memoize(timeout=900)  # 15 Minuten Cache für Performance-Stats
 def get_performance_stats():
     """Berechne Performance-Statistiken"""
     try:
@@ -221,6 +260,7 @@ def get_performance_stats():
             'worst_symbol': 'N/A'
         }
 
+@cache.memoize(timeout=600)  # 10 Minuten Cache für Charts
 def create_price_chart(df, symbol):
     """Erstelle Preis-Chart mit Plotly - vereinfachte Version für Web"""
     # Begrenze Daten auf letzte 50 Einträge für Performance
