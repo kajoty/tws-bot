@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fundamentale Analyse - {{ symbol }}</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #333; text-align: center; }
+        .back-link { display: inline-block; margin-bottom: 20px; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+        .back-link:hover { background: #0056b3; }
+        .analysis-section { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin: 20px 0; }
+        .score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
+        .score-card { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; border-left: 4px solid #007bff; }
+        .score-value { font-size: 2em; font-weight: bold; color: #007bff; }
+        .score-label { font-size: 0.9em; color: #666; margin-top: 5px; }
+        .rating-good { color: #28a745; font-weight: bold; }
+        .rating-neutral { color: #ffc107; font-weight: bold; }
+        .rating-bad { color: #dc3545; font-weight: bold; }
+        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin: 20px 0; }
+        .metric-card { background: white; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
+        .metric-value { font-size: 1.2em; font-weight: bold; color: #333; }
+        .metric-label { font-size: 0.9em; color: #666; }
+        .recommendations { background: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 4px solid #2196f3; }
+        .strategy-tag { display: inline-block; background: #4caf50; color: white; padding: 5px 10px; border-radius: 15px; margin: 2px; font-size: 0.8em; }
+        .no-data { color: #666; font-style: italic; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← Zurück zum Dashboard</a>
+
+        <h1>Fundamentale Analyse: {{ symbol }}</h1>
+        <p style="text-align: center; color: #666;">Aktueller Preis: ${{ "%.2f"|format(current_price) }} | Stand: {{ timestamp }}</p>
+
+        <!-- Fundamentale Scores -->
+        <div class="analysis-section">
+            <h2>Fundamentale Bewertung</h2>
+            {% if fundamental_scores.overall > 0 %}
+                <div class="score-grid">
+                    <div class="score-card">
+                        <div class="score-value">{{ "%.1f"|format(fundamental_scores.overall) }}</div>
+                        <div class="score-label">Gesamt-Score</div>
+                    </div>
+                    <div class="score-card">
+                        <div class="score-value">{{ "%.1f"|format(fundamental_scores.value) }}</div>
+                        <div class="score-label">Value Score</div>
+                    </div>
+                    <div class="score-card">
+                        <div class="score-value">{{ "%.1f"|format(fundamental_scores.growth) }}</div>
+                        <div class="score-label">Growth Score</div>
+                    </div>
+                    <div class="score-card">
+                        <div class="score-value">{{ "%.1f"|format(fundamental_scores.quality) }}</div>
+                        <div class="score-label">Quality Score</div>
+                    </div>
+                    <div class="score-card">
+                        <div class="score-value">{{ "%.1f"|format(fundamental_scores.momentum) }}</div>
+                        <div class="score-label">Momentum Score</div>
+                    </div>
+                    <div class="score-card">
+                        <div class="score-value">{{ "%.1f"|format(fundamental_scores.risk) }}</div>
+                        <div class="score-label">Risk Score</div>
+                    </div>
+                </div>
+            {% else %}
+                <p class="no-data">Keine fundamentalen Scores verfügbar. Fundamentale Daten werden beim nächsten Scan geladen.</p>
+            {% endif %}
+        </div>
+
+        <!-- Qualitative Ratings -->
+        {% if analysis_report.ratings %}
+        <div class="analysis-section">
+            <h2>Qualitative Bewertung</h2>
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-value {{ 'rating-good' if analysis_report.ratings.value == 'Unterbewertet' else 'rating-neutral' if analysis_report.ratings.value == 'Fair' else 'rating-bad' }}">
+                        {{ analysis_report.ratings.value }}
+                    </div>
+                    <div class="metric-label">Bewertung</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value {{ 'rating-good' if analysis_report.ratings.growth == 'Hohes Wachstum' else 'rating-neutral' if analysis_report.ratings.growth == 'Moderates Wachstum' else 'rating-bad' }}">
+                        {{ analysis_report.ratings.growth }}
+                    </div>
+                    <div class="metric-label">Wachstum</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value {{ 'rating-good' if analysis_report.ratings.quality == 'Exzellent' or analysis_report.ratings.quality == 'Gut' else 'rating-neutral' if analysis_report.ratings.quality == 'Akzeptabel' else 'rating-bad' }}">
+                        {{ analysis_report.ratings.quality }}
+                    </div>
+                    <div class="metric-label">Qualität</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value {{ 'rating-good' if analysis_report.ratings.risk == 'Sehr sicher' or analysis_report.ratings.risk == 'Sicher' else 'rating-neutral' if analysis_report.ratings.risk == 'Moderates Risiko' else 'rating-bad' }}">
+                        {{ analysis_report.ratings.risk }}
+                    </div>
+                    <div class="metric-label">Risiko</div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Strategie-Empfehlungen -->
+        {% if analysis_report.recommendations %}
+        <div class="analysis-section">
+            <h2>Empfohlene Strategien</h2>
+            <div class="recommendations">
+                <p>Für dieses Unternehmen werden folgende Optionsstrategien empfohlen:</p>
+                {% for strategy in analysis_report.recommendations %}
+                    <span class="strategy-tag">{{ strategy }}</span>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Detaillierte Kennzahlen -->
+        {% if analysis_report.key_metrics %}
+        <div class="analysis-section">
+            <h2>Wichtige Kennzahlen</h2>
+            <table>
+                <tr>
+                    <th>Kennzahl</th>
+                    <th>Wert</th>
+                    <th>Kennzahl</th>
+                    <th>Wert</th>
+                </tr>
+                <tr>
+                    <td>P/E Ratio</td>
+                    <td>{{ "%.2f"|format(analysis_report.key_metrics.pe_ratio) if analysis_report.key_metrics.pe_ratio else 'N/A' }}</td>
+                    <td>ROE</td>
+                    <td>{{ "%.1f"|format(analysis_report.key_metrics.roe * 100) + '%' if analysis_report.key_metrics.roe else 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td>P/B Ratio</td>
+                    <td>{{ "%.2f"|format(analysis_report.key_metrics.pb_ratio) if analysis_report.key_metrics.pb_ratio else 'N/A' }}</td>
+                    <td>ROA</td>
+                    <td>{{ "%.1f"|format(analysis_report.key_metrics.roa * 100) + '%' if analysis_report.key_metrics.roa else 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td>Beta</td>
+                    <td>{{ "%.2f"|format(analysis_report.key_metrics.beta) if analysis_report.key_metrics.beta else 'N/A' }}</td>
+                    <td>FCF Yield</td>
+                    <td>{{ "%.1f"|format(analysis_report.key_metrics.fcf_yield * 100) + '%' if analysis_report.key_metrics.fcf_yield else 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td>Dividendenrendite</td>
+                    <td>{{ "%.1f"|format(analysis_report.key_metrics.div_yield * 100) + '%' if analysis_report.key_metrics.div_yield else 'N/A' }}</td>
+                    <td>Umsatzwachstum</td>
+                    <td>{{ "%.1f"|format(analysis_report.key_metrics.revenue_growth * 100) + '%' if analysis_report.key_metrics.revenue_growth else 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td>EPS Wachstum</td>
+                    <td>{{ "%.1f"|format(analysis_report.key_metrics.eps_growth * 100) + '%' if analysis_report.key_metrics.eps_growth else 'N/A' }}</td>
+                    <td></td>
+                    <td></td>
+                </tr>
+            </table>
+        </div>
+        {% endif %}
+
+        <!-- Rohdaten -->
+        {% if fundamental_data %}
+        <div class="analysis-section">
+            <h2>Rohdaten (TWS ReportSnapshot)</h2>
+            <details>
+                <summary style="cursor: pointer; font-weight: bold;">Alle verfügbaren fundamentalen Daten anzeigen</summary>
+                <table style="margin-top: 15px;">
+                    <tr>
+                        <th>Feld</th>
+                        <th>Wert</th>
+                    </tr>
+                    {% for key, value in fundamental_data.items() %}
+                        <tr>
+                            <td>{{ key }}</td>
+                            <td>{{ value if value is not none else 'N/A' }}</td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            </details>
+        </div>
+        {% endif %}
+
+        <!-- Technische Analyse Link -->
+        <div class="analysis-section">
+            <h2>Technische Analyse</h2>
+            <p><a href="/chart/{{ symbol }}" class="back-link" style="background: #28a745;">Technische Charts anzeigen</a></p>
+        </div>
+    </div>
+</body>
+</html>

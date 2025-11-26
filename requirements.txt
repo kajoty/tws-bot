@@ -1,0 +1,22 @@
+# Interactive Brokers TWS API
+ibapi>=9.81.1
+
+# Pushover Benachrichtigungen
+pushover-complete>=1.1.1
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Web Framework
+flask>=3.0.0
+plotly>=5.0.0
+
+# Utilities
+python-dateutil>=2.8.0
+pytz>=2023.3
+requests>=2.31.0
+beautifulsoup4>=4.12.0

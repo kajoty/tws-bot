@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Configuration
+config_local.py
+*.env
+.env.local
+
+# Trading data
+data/
+plots/
+*.csv
+*.pkl
+*.png
+*.jpg
+
+# Docker
+.docker/
+docker-volumes/
+
+# Backups
+backups/
+*.backup
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chart - {{ symbol }}</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; }
+        .back-link { display: inline-block; margin-bottom: 20px; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+        .back-link:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← Zurück zum Dashboard</a>
+        <h1>Preis-Chart: {{ symbol }}</h1>
+        <div id="chart"></div>
+    </div>
+
+    <script>
+        // Chart-Daten aus Python
+        var chartData = {
+            data: {{ chart_data.data|tojson }},
+            layout: {{ chart_data.layout|tojson }}
+        };
+
+        console.log('Chart data:', chartData);
+
+        // Erstelle Chart
+        Plotly.newPlot('chart', chartData.data, chartData.layout, {responsive: true})
+            .then(function() {
+                console.log('Chart rendered successfully');
+            })
+            .catch(function(error) {
+                console.error('Chart error:', error);
+                document.getElementById('chart').innerHTML =
+                    '<p style="color: red; text-align: center; padding: 20px;">' +
+                    'Fehler beim Laden des Charts: ' + error.message + '<br>' +
+                    'Bitte versuchen Sie es später nochmal.</p>';
+            });
+    </script>
+</body>
+</html>
