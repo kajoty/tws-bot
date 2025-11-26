@@ -1,10 +1,14 @@
 from flask import Flask, render_template, request
 import pandas as pd
-from ..data.database import DatabaseManager
-from ..config.settings import *
-from ..core.indicators import calculate_indicators
-from ..core.signals import check_entry_signal
-from ..api.tws_connector import TWSConnector
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from tws_bot.data.database import DatabaseManager
+from tws_bot.config.settings import *
+from tws_bot.core.indicators import calculate_indicators
+from tws_bot.core.signals import check_entry_signal
+from tws_bot.api.tws_connector import TWSConnector
 import logging
 import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
@@ -120,7 +124,7 @@ def get_market_overview():
     try:
         for symbol in WATCHLIST_STOCKS:  # Alle verfügbaren Ticker
             try:
-                df = db.load_historical_data(symbol)
+                df = db.get_historical_data(symbol)
                 if df is None or df.empty:
                     continue
                 
@@ -324,7 +328,7 @@ def dashboard():
                     logger.info(f"Verarbeitet: {processed_count}/{len(watchlist)} Symbole")
                 
                 # Lade historische Daten
-                df = db.load_historical_data(symbol)
+                df = db.get_historical_data(symbol)
                 if df is None or df.empty:
                     logger.warning(f"Keine historischen Daten für {symbol} verfügbar")
                     continue
@@ -442,6 +446,13 @@ def dashboard():
         if filter_level != 'all':
             hit_rates = {k: v for k, v in hit_rates.items() if k == filter_level}
 
+        # Lade aktuellen VIX-Wert
+        try:
+            current_vix = db.get_latest_vix()
+        except Exception as vix_error:
+            logger.error(f"Fehler beim Laden des VIX: {vix_error}")
+            current_vix = None
+
         return render_template('dashboard.html',
                              signals=signals,
                              hit_rates=hit_rates,
@@ -455,6 +466,7 @@ def dashboard():
                              options_signals=options_signals_list,
                              options_stats=options_stats,
                              portfolio_data=portfolio_data,
+                             current_vix=current_vix,
                              filter_level=filter_level,
                              current_page=page,
                              total_pages=total_pages,
@@ -501,7 +513,7 @@ def chart(symbol):
                                  show_details=True)
 
         # Lade Daten und erstelle Chart
-        df = db.load_historical_data(symbol)
+        df = db.get_historical_data(symbol)
         if df is None or df.empty:
             return render_template('error.html',
                                  error_message=f"Keine historischen Daten für Symbol '{symbol}' verfügbar.",
@@ -538,7 +550,7 @@ def fundamentals(symbol):
                                  show_details=False), 404
 
         # Lade historische Daten für technische Analyse
-        df = db.load_historical_data(symbol)
+        df = db.get_historical_data(symbol)
         if df is not None and not df.empty:
             df = calculate_indicators(df)
             latest = df.iloc[-1]
@@ -552,6 +564,7 @@ def fundamentals(symbol):
         analysis_report = {}
 
         try:
+            scanner = get_options_scanner()
             if symbol in scanner.fundamental_data_cache:
                 fundamental_data = scanner.fundamental_data_cache[symbol]
                 fundamental_scores = scanner._calculate_fundamental_score(symbol)

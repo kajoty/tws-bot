@@ -4,7 +4,7 @@ Signal-Generierungslogik für Trading Signale.
 
 from typing import Optional, Dict
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from .indicators import calculate_indicators
 from ..config.settings import (
     MA_LONG_PERIOD, USE_MA_CROSSOVER, USE_RSI, USE_MACD,
@@ -13,6 +13,7 @@ from ..config.settings import (
     MIN_POSITION_SIZE, USE_VIX_FILTER, VIX_MAX_LEVEL, VIX_HIGH_LEVEL,
     USE_ATR, ATR_MULTIPLIER, USE_BB, MIN_CUSHION_FOR_SIGNALS, MAX_POSITIONS
 )
+from ..data.database import DatabaseManager
 
 
 def calculate_options_trade_cushion_impact(portfolio_data: dict, max_risk: float, strategy_type: str) -> dict:
@@ -320,3 +321,31 @@ def check_exit_signal(symbol: str, df: pd.DataFrame, position: Dict) -> Optional
         }
 
     return None
+
+
+def get_vix_level(tws_connector) -> Optional[float]:
+    """
+    Ruft den aktuellen VIX-Wert ab und speichert ihn in der DB.
+    Vereinfachte Version basierend auf options_scanner.
+    """
+    db = DatabaseManager()
+
+    # Versuche Yahoo Finance zuerst
+    try:
+        import requests
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX"
+        params = {'period1': int((datetime.now() - timedelta(days=1)).timestamp()),
+                  'period2': int(datetime.now().timestamp()),
+                  'interval': '1m'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        vix_value = data['chart']['result'][0]['meta']['regularMarketPrice']
+        db.save_vix_value(vix_value)
+        return vix_value
+    except Exception as e:
+        print(f"VIX Yahoo Fehler: {e}")
+
+    # Fallback: Letzter gespeicherter Wert
+    return db.get_latest_vix()

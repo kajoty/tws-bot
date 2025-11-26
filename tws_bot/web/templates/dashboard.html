@@ -87,6 +87,10 @@
                 <h3>Positionen</h3>
                 <p>{{ portfolio_data.num_positions }}</p>
             </div>
+            <div class="stat-box">
+                <h3>VIX (Volatilität)</h3>
+                <p class="{% if current_vix and current_vix > 25 %}negative{% elif current_vix and current_vix > 20 %}warning{% else %}positive{% endif %}">{{ "%.1f"|format(current_vix if current_vix is not none else 0) }}</p>
+            </div>
         </div>
 
         <!-- Filter-Buttons -->

@@ -1,6 +1,6 @@
 # watchlist_tickers.txt
 # Eine Zeile pro Ticker, keine Leerzeichen
-AIR.PA
+AIR
 MMM
 AOS
 ABT
@@ -66,7 +66,7 @@ BALL
 BAC
 BAX
 BDX
-BRK.B
+BRK B
 BBY
 TECH
 BIIB
@@ -81,7 +81,6 @@ BMY
 AVGO
 BR
 BRO
-BF.B
 BLDR
 BG
 BXP
@@ -235,7 +234,6 @@ HD
 HON
 HRL
 HST
-HWM
 HPQ
 HUBB
 HUM
@@ -492,7 +490,6 @@ ZBH
 ZTS
 ABNB
 GOOGL
-GOOG
 AMZN
 AEP
 AMGN
@@ -604,7 +601,6 @@ BALL
 BAC
 BAX
 BDX
-BRK.B
 BBY
 TECH
 BIIB
@@ -619,7 +615,6 @@ BMY
 AVGO
 BR
 BRO
-BF.B
 BLDR
 BG
 BXP
@@ -863,7 +858,6 @@ NTAP
 NFLX
 NEM
 NWSA
-NWS
 NEE
 NKE
 NI
@@ -1030,7 +1024,6 @@ ZBH
 ZTS
 ABNB
 GOOGL
-GOOG
 AMZN
 AEP
 AMGN

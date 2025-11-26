@@ -187,7 +187,7 @@ class OptionsScanner(EWrapper, EClient):
             cached_data = self.db.get_earnings_date(symbol)
             
             if cached_data and cached_data.get('earnings_date'):
-                earnings_date = cached_data['earnings_date']
+                earnings_date = datetime.fromisoformat(cached_data['earnings_date'])
                 days_until = (earnings_date - datetime.now()).days
                 is_earnings_week = days_until <= 7 and days_until >= -1
                 
@@ -434,13 +434,14 @@ class OptionsScanner(EWrapper, EClient):
         
         # PE Ratio (niedriger = besser, aber nicht negativ)
         if data.get('pe_ratio') and data['pe_ratio'] > 0:
-            pe_score = max(0, min(100, 100 - (data['pe_ratio'] - 10) * 2))  # Optimal ~10-20
+            # Bessere Formel: Höhere Strafe für hohe PE Ratios
+            pe_score = max(0, min(100, 100 - (data['pe_ratio'] - 10) * 3))  # Optimal ~10-15
             score += pe_score
             count += 1
         
         # PB Ratio (niedriger = besser)
         if data.get('pb_ratio') and data['pb_ratio'] > 0:
-            pb_score = max(0, min(100, 100 - (data['pb_ratio'] - 1) * 20))  # Optimal ~1-2
+            pb_score = max(0, min(100, 100 - (data['pb_ratio'] - 1) * 25))  # Optimal ~1-2
             score += pb_score
             count += 1
         
@@ -450,7 +451,17 @@ class OptionsScanner(EWrapper, EClient):
             score += div_score
             count += 1
         
-        return round(score / max(count, 1), 2)
+        # PS Ratio (niedriger = besser)
+        if data.get('ps_ratio') and data['ps_ratio'] > 0:
+            ps_score = max(0, min(100, 100 - (data['ps_ratio'] - 1) * 20))  # Optimal ~1-2
+            score += ps_score
+            count += 1
+        
+        # Wenn keine Daten verfügbar, return neutral score
+        if count == 0:
+            return 50.0
+        
+        return round(score / count, 2)
     
     def _calculate_growth_score(self, data: Dict) -> float:
         """Bewertet Unternehmen basierend auf Wachstumsmetriken."""
@@ -475,7 +486,17 @@ class OptionsScanner(EWrapper, EClient):
             score += peg_score
             count += 1
         
-        return round(score / max(count, 1), 2)
+        # Book Value Growth (höher = besser)
+        if data.get('book_value_growth'):
+            bv_score = max(0, min(100, 50 + data['book_value_growth'] * 2))
+            score += bv_score
+            count += 1
+        
+        # Wenn keine Daten verfügbar, return neutral score
+        if count == 0:
+            return 50.0
+        
+        return round(score / count, 2)
     
     def _calculate_quality_score(self, data: Dict) -> float:
         """Bewertet Unternehmen basierend auf Qualitätsmetriken."""
@@ -506,7 +527,17 @@ class OptionsScanner(EWrapper, EClient):
             score += op_margin_score
             count += 1
         
-        return round(score / max(count, 1), 2)
+        # Gross Margin (höher = besser)
+        if data.get('gross_margin'):
+            gross_margin_score = max(0, min(100, 50 + data['gross_margin'] * 2))
+            score += gross_margin_score
+            count += 1
+        
+        # Wenn keine Daten verfügbar, return neutral score
+        if count == 0:
+            return 50.0
+        
+        return round(score / count, 2)
     
     def _calculate_momentum_score(self, data: Dict) -> float:
         """Bewertet Unternehmen basierend auf Momentum-Metriken."""
@@ -526,7 +557,17 @@ class OptionsScanner(EWrapper, EClient):
             score += target_score
             count += 1
         
-        return round(score / max(count, 1), 2)
+        # Fair Value vs PE Ratio (niedriger PE bei hohem Fair Value = gut)
+        if data.get('fair_value') and data.get('pe_ratio') and data['fair_value'] > 0:
+            fair_value_score = min(100, max(0, 100 - abs(data['pe_ratio'] - 15) * 2))
+            score += fair_value_score
+            count += 1
+        
+        # Wenn keine Daten verfügbar, return neutral score
+        if count == 0:
+            return 50.0
+        
+        return round(score / count, 2)
     
     def _calculate_risk_score(self, data: Dict) -> float:
         """Bewertet Unternehmen basierend auf Risikometriken."""
@@ -539,6 +580,8 @@ class OptionsScanner(EWrapper, EClient):
                 penalties += 30
             elif data['beta'] > 1.2:  # Moderat volatil
                 penalties += 15
+            elif data['beta'] < 0.8:  # Niedrig volatil = Bonus
+                penalties -= 10
         
         # Debt/Equity implizit durch niedrige ROE/ROA (bereits in quality score)
         
@@ -548,10 +591,18 @@ class OptionsScanner(EWrapper, EClient):
                 penalties += 20
             elif data['market_cap'] < 10e9:  # < 10B = Mid Cap
                 penalties += 10
+            elif data['market_cap'] > 100e9:  # > 100B = Large Cap Bonus
+                penalties -= 10
         
         # Payout Ratio (zu hoch = Risiko für Dividendenkürzung)
         if data.get('payout_ratio') and data['payout_ratio'] > 100:
             penalties += 25
+        elif data.get('payout_ratio') and data['payout_ratio'] > 80:
+            penalties += 15
+        
+        # Volume (höher = besserer Handel = weniger Risiko)
+        if data.get('avg_volume') and data['avg_volume'] < 100000:  # Niedriges Volumen = Risiko
+            penalties += 15
         
         return max(0, round(score - penalties, 2))
     
@@ -1026,40 +1077,46 @@ class OptionsScanner(EWrapper, EClient):
         return scores
 
     def _calculate_value_score(self, fundamentals: Dict) -> float:
-        """Value Investing Score (Graham/Buffett Style) - Sucht unterbewertete Aktien."""
-        score = 50  # Basis-Score
-
-        # P/E Ratio Bewertung (niedriger = besser)
-        pe = fundamentals.get('pe_ratio')
-        if pe:
-            if pe < 10: score += 20      # Stark unterbewertet
-            elif pe < 15: score += 10    # Moderat unterbewertet
-            elif pe < 20: score += 0     # Fair bewertet
-            elif pe < 25: score -= 10    # Moderat überbewertet
-            else: score -= 20            # Stark überbewertet
-
-        # P/B Ratio (niedriger = besser)
-        pb = fundamentals.get('pb_ratio')
-        if pb:
-            if pb < 1.0: score += 15     # Stark unterbewertet
-            elif pb < 1.5: score += 5    # Moderat unterbewertet
-            elif pb < 3.0: score += 0    # Fair
-            else: score -= 10            # Überbewertet
-
+        """Bewertet Unternehmen basierend auf Value-Metriken."""
+        score = 0
+        count = 0
+        
+        # PE Ratio (niedriger = besser, aber nicht negativ)
+        if fundamentals.get('pe_ratio') and fundamentals['pe_ratio'] > 0:
+            # Bessere Formel: Höhere Strafe für hohe PE Ratios
+            pe_score = max(0, min(100, 100 - (fundamentals['pe_ratio'] - 10) * 3))  # Optimal ~10-15
+            score += pe_score
+            count += 1
+        
+        # PB Ratio (niedriger = besser)
+        if fundamentals.get('pb_ratio') and fundamentals['pb_ratio'] > 0:
+            pb_score = max(0, min(100, 100 - (fundamentals['pb_ratio'] - 1) * 25))  # Optimal ~1-2
+            score += pb_score
+            count += 1
+        
+        # Dividend Yield (höher = besser)
+        if fundamentals.get('div_yield') and fundamentals['div_yield'] >= 0:
+            div_score = min(100, fundamentals['div_yield'] * 200)  # 5% = 100 Punkte
+            score += div_score
+            count += 1
+        
+        # PS Ratio (niedriger = besser)
+        if fundamentals.get('ps_ratio') and fundamentals['ps_ratio'] > 0:
+            ps_score = max(0, min(100, 100 - (fundamentals['ps_ratio'] - 1) * 20))  # Optimal ~1-2
+            score += ps_score
+            count += 1
+        
         # EV/EBITDA (niedriger = besser)
-        ev_ebitda = fundamentals.get('ev_ebitda')
-        if ev_ebitda:
-            if ev_ebitda < 8: score += 10
-            elif ev_ebitda < 12: score += 0
-            else: score -= 10
-
-        # Dividend Yield (höher = besser für Value)
-        div_yield = fundamentals.get('div_yield')
-        if div_yield:
-            if div_yield > 0.04: score += 10  # 4%+ Dividende
-            elif div_yield > 0.02: score += 5  # 2%+ Dividende
-
-        return max(0, min(100, score))
+        if fundamentals.get('ev_ebitda') and fundamentals['ev_ebitda'] > 0:
+            ev_score = max(0, min(100, 100 - (fundamentals['ev_ebitda'] - 8) * 5))  # Optimal ~8-12
+            score += ev_score
+            count += 1
+        
+        # Wenn keine Daten verfügbar, return neutral score
+        if count == 0:
+            return 50.0
+        
+        return round(score / count, 2)
 
     def _calculate_growth_score(self, fundamentals: Dict) -> float:
         """Growth Score - Bewertet Wachstumspotenzial."""

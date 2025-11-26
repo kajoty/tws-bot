@@ -26,7 +26,7 @@ from tws_bot.config.settings import (
 )
 from tws_bot.notifications.pushover import PushoverNotifier
 from tws_bot.data.database import DatabaseManager
-from tws_bot.core.signals import check_entry_signal, check_exit_signal
+from tws_bot.core.signals import check_entry_signal, check_exit_signal, get_vix_level
 from tws_bot.core.indicators import calculate_indicators
 from tws_bot.core.indicators import calculate_indicators
 from tws_bot.api.tws_connector import TWSConnector
@@ -658,6 +658,16 @@ class SignalService(TWSConnector):
             logger.warning(f"[PORTFOLIO] Fehler beim Abrufen der Portfolio-Daten: {e}")
             portfolio_data = {}
         
+        # VIX-Daten abrufen und speichern
+        try:
+            vix_level = get_vix_level(self)
+            if vix_level:
+                logger.info(f"[VIX] Aktueller VIX-Wert: {vix_level:.2f}")
+            else:
+                logger.warning("[VIX] Konnte VIX-Wert nicht abrufen")
+        except Exception as e:
+            logger.warning(f"[VIX] Fehler beim Abrufen des VIX-Werts: {e}")
+        
         for symbol in self.watchlist:
             try:
                 # --- Fundamentaldaten prüfen/laden ---
@@ -671,7 +681,7 @@ class SignalService(TWSConnector):
                 # --- Historische Daten prüfen/laden ---
                 if symbol not in self.historical_data_cache:
                     # Versuche aus DB zu laden
-                    df_hist = self.db.load_historical_data(symbol, days=HISTORY_DAYS)
+                    df_hist = self.db.get_historical_data(symbol, days=HISTORY_DAYS)
                     if not df_hist.empty:
                         self.historical_data_cache[symbol] = df_hist
                         logger.info(f"[CACHE] Historische Daten für {symbol} aus DB geladen.")
