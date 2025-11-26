@@ -1124,7 +1124,7 @@ class OptionsScanner(EWrapper, EClient):
 
         # EPS Wachstum
         eps_growth = fundamentals.get('eps_growth')
-        if eps_growth:
+        if eps_growth is not None:
             if eps_growth > 0.20: score += 20     # 20%+ Wachstum
             elif eps_growth > 0.10: score += 10   # 10%+ Wachstum
             elif eps_growth > 0.05: score += 0    # 5%+ Wachstum
@@ -1133,7 +1133,7 @@ class OptionsScanner(EWrapper, EClient):
 
         # Umsatzwachstum
         revenue_growth = fundamentals.get('revenue_growth')
-        if revenue_growth:
+        if revenue_growth is not None:
             if revenue_growth > 0.15: score += 15
             elif revenue_growth > 0.08: score += 5
             elif revenue_growth > 0.03: score += 0
@@ -1141,7 +1141,7 @@ class OptionsScanner(EWrapper, EClient):
 
         # PEG Ratio (niedriger = besseres Wachstum pro Risiko)
         peg = fundamentals.get('peg_ratio')
-        if peg:
+        if peg is not None:
             if peg < 1.0: score += 10     # Günstiges Wachstum
             elif peg < 1.5: score += 5    # Akzeptables Wachstum
             elif peg < 2.0: score += 0    # Fair
@@ -1155,7 +1155,7 @@ class OptionsScanner(EWrapper, EClient):
 
         # ROE (höher = besser)
         roe = fundamentals.get('roe')
-        if roe:
+        if roe is not None:
             if roe > 0.20: score += 20     # Exzellente Profitabilität
             elif roe > 0.15: score += 10   # Sehr gute Profitabilität
             elif roe > 0.10: score += 0    # Gute Profitabilität
@@ -1164,7 +1164,7 @@ class OptionsScanner(EWrapper, EClient):
 
         # ROA (höher = besser)
         roa = fundamentals.get('roa')
-        if roa:
+        if roa is not None:
             if roa > 0.10: score += 15
             elif roa > 0.07: score += 5
             elif roa > 0.03: score += 0
@@ -1172,7 +1172,7 @@ class OptionsScanner(EWrapper, EClient):
 
         # Profit Margins (höher = besser)
         profit_margin = fundamentals.get('profit_margin')
-        if profit_margin:
+        if profit_margin is not None:
             if profit_margin > 0.15: score += 10
             elif profit_margin > 0.08: score += 5
             elif profit_margin > 0.03: score += 0
@@ -1180,16 +1180,16 @@ class OptionsScanner(EWrapper, EClient):
 
         # Operating Margin (höher = besser)
         op_margin = fundamentals.get('operating_margin')
-        if op_margin:
+        if op_margin is not None:
             if op_margin > 0.15: score += 10
             elif op_margin > 0.10: score += 5
             else: score -= 5
 
         # Free Cash Flow positiv?
         fcf = fundamentals.get('fcf')
-        if fcf and fcf > 0:
+        if fcf is not None and fcf > 0:
             score += 10
-        elif fcf and fcf < 0:
+        elif fcf is not None and fcf < 0:
             score -= 15
 
         return max(0, min(100, score))
@@ -1200,7 +1200,7 @@ class OptionsScanner(EWrapper, EClient):
 
         # Analyst Rating (höher = besser)
         analyst_rating = fundamentals.get('analyst_rating')
-        if analyst_rating:
+        if analyst_rating is not None:
             if analyst_rating >= 4.5: score += 20    # Strong Buy
             elif analyst_rating >= 4.0: score += 10  # Buy
             elif analyst_rating >= 3.5: score += 0   # Hold
@@ -1212,9 +1212,9 @@ class OptionsScanner(EWrapper, EClient):
         fair_value = fundamentals.get('fair_value')
 
         # Vereinfacht: Wenn Target Price deutlich höher als Fair Value
-        if target_price and fair_value and target_price > fair_value * 1.1:
+        if target_price is not None and fair_value is not None and target_price > fair_value * 1.1:
             score += 10
-        elif target_price and fair_value and target_price < fair_value * 0.9:
+        elif target_price is not None and fair_value is not None and target_price < fair_value * 0.9:
             score -= 10
 
         return max(0, min(100, score))
@@ -1225,7 +1225,7 @@ class OptionsScanner(EWrapper, EClient):
 
         # Beta (niedriger = weniger volatil = besser)
         beta = fundamentals.get('beta')
-        if beta:
+        if beta is not None:
             if beta < 0.8: score += 20      # Sehr stabil
             elif beta < 1.0: score += 10    # Stabil
             elif beta < 1.2: score += 0     # Marktneutral
@@ -1234,7 +1234,7 @@ class OptionsScanner(EWrapper, EClient):
 
         # Marktkapitalisierung (höher = weniger Risiko)
         market_cap = fundamentals.get('market_cap')
-        if market_cap:
+        if market_cap is not None:
             if market_cap > 100_000_000_000: score += 15  # Large Cap
             elif market_cap > 10_000_000_000: score += 10  # Mid Cap
             elif market_cap > 2_000_000_000: score += 0    # Small Cap
@@ -1242,7 +1242,7 @@ class OptionsScanner(EWrapper, EClient):
 
         # Volumen (höher = besser für Liquidität)
         avg_volume = fundamentals.get('avg_volume')
-        if avg_volume:
+        if avg_volume is not None:
             if avg_volume > 10_000_000: score += 10   # Sehr liquide
             elif avg_volume > 1_000_000: score += 5   # Gut liquide
             elif avg_volume > 100_000: score += 0    # Akzeptabel

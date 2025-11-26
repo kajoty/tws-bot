@@ -17,10 +17,29 @@ from datetime import datetime
 from flask_caching import Cache
 import time
 
+# Logger früh definieren für load_web_watchlist()
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 # Import OptionsScanner lazy (vermeidet zirkuläre Imports)
 _options_scanner = None
 _scanner_last_init = 0
 SCANNER_CACHE_TIMEOUT = 300  # 5 Minuten Cache für Scanner
+
+# Web-Watchlist (kleinere Liste für bessere Performance)
+def load_web_watchlist():
+    """Lade kleinere Watchlist für Web-App Performance"""
+    try:
+        web_watchlist_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "web_watchlist.txt")
+        with open(web_watchlist_path, "r", encoding="utf-8", errors="ignore") as f:
+            tickers = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        return tickers
+    except Exception as e:
+        logger.warning(f"Konnte Web-Watchlist nicht laden: {e}, verwende Standard-Liste")
+        return ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "SPY", "QQQ"]
+
+WEB_WATCHLIST_STOCKS = load_web_watchlist()
 
 def get_options_scanner():
     """Lazy loading des OptionsScanner mit Caching."""
@@ -42,10 +61,6 @@ def get_options_scanner():
     return _options_scanner
 
 app = Flask(__name__, template_folder='templates')
-
-# Logger konfigurieren
-logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 # Cache konfigurieren
 cache_config = {
@@ -155,51 +170,72 @@ def get_historical_signals(limit=50):
         logger.error(f"Fehler beim Laden historischer Signale: {e}")
         return []
 
+@cache.memoize(timeout=1800)  # 30 Minuten Cache für fundamentale Scores
+def get_fundamental_scores(symbol):
+    """Lade fundamentale Scores für ein Symbol (mit Cache)"""
+    try:
+        scanner = get_options_scanner()
+        if symbol in scanner.fundamental_data_cache:
+            fundamental_scores = scanner._calculate_fundamental_score(symbol)
+            report = scanner.get_fundamental_analysis_report(symbol)
+            fundamental_ratings = report.get('ratings', {})
+            recommendations = report.get('recommendations', [])
+            return fundamental_scores, fundamental_ratings, recommendations
+        else:
+            return {'overall': 0, 'value': 0, 'growth': 0, 'quality': 0, 'momentum': 0, 'risk': 0}, {'value': 'N/A', 'growth': 'N/A', 'quality': 'N/A', 'risk': 'N/A'}, []
+    except Exception as e:
+        logger.warning(f"Fundamentale Analyse fehlgeschlagen für {symbol}: {e}")
+        return {'overall': 0, 'value': 0, 'growth': 0, 'quality': 0, 'momentum': 0, 'risk': 0}, {'value': 'N/A', 'growth': 'N/A', 'quality': 'N/A', 'risk': 'N/A'}, []
+
+@cache.memoize(timeout=300)  # 5 Minuten Cache für historische Daten + Indikatoren
+def get_symbol_data(symbol):
+    """Lade historische Daten und berechne Indikatoren für ein Symbol (mit Cache)"""
+    try:
+        df = db.get_historical_data(symbol)
+        if df is None or df.empty:
+            return None
+        
+        df = calculate_indicators(df)
+        latest = df.iloc[-1]
+        
+        # Berechne Performance
+        if len(df) > 1:
+            prev_day = df.iloc[-2]['close']
+            daily_change = ((latest['close'] - prev_day) / prev_day) * 100
+        else:
+            daily_change = 0
+        
+        return {
+            'price': latest['close'],
+            'change': daily_change,
+            'rsi': latest.get('rsi', 0),
+            'ma_short': latest.get('ma_short', 0),
+            'ma_long': latest.get('ma_long', 0),
+            'volume': latest.get('volume', 0),
+            'atr': latest.get('atr', 0) if 'atr' in latest and not pd.isna(latest['atr']) else 0
+        }
+    except Exception as e:
+        logger.error(f"Fehler beim Laden von Daten für {symbol}: {e}")
+        return None
+
 @cache.memoize(timeout=600)  # 10 Minuten Cache für Marktübersicht
 def get_market_overview():
     """Erstelle Marktübersicht für alle Watchlist-Symbole"""
     overview = []
     try:
-        for symbol in WATCHLIST_STOCKS:  # Alle verfügbaren Ticker
+        for symbol in WEB_WATCHLIST_STOCKS:  # Verwende kleinere Web-Watchlist für Performance
             try:
-                df = db.get_historical_data(symbol)
-                if df is None or df.empty:
+                # Symbol-Daten laden (jetzt gecacht!)
+                symbol_data = get_symbol_data(symbol)
+                if symbol_data is None:
                     continue
                 
-                df = calculate_indicators(df)
-                latest = df.iloc[-1]
-                
-                # Berechne Performance
-                if len(df) > 1:
-                    prev_day = df.iloc[-2]['close']
-                    daily_change = ((latest['close'] - prev_day) / prev_day) * 100
-                else:
-                    daily_change = 0
-                
-                # Fundamentale Scores laden
-                fundamental_scores = {'overall': 0, 'value': 0, 'growth': 0, 'quality': 0, 'momentum': 0, 'risk': 0}
-                fundamental_ratings = {'value': 'N/A', 'growth': 'N/A', 'quality': 'N/A', 'risk': 'N/A'}
-                recommendations = []
-                
-                try:
-                    scanner = get_options_scanner()
-                    if symbol in scanner.fundamental_data_cache:
-                        fundamental_scores = scanner._calculate_fundamental_score(symbol)
-                        report = scanner.get_fundamental_analysis_report(symbol)
-                        fundamental_ratings = report.get('ratings', {})
-                        recommendations = report.get('recommendations', [])
-                except Exception as e:
-                    logger.warning(f"Fundamentale Analyse fehlgeschlagen für {symbol}: {e}")
+                # Fundamentale Scores laden (jetzt gecacht!)
+                fundamental_scores, fundamental_ratings, recommendations = get_fundamental_scores(symbol)
                 
                 overview.append({
                     'symbol': symbol,
-                    'price': latest['close'],
-                    'change': daily_change,
-                    'rsi': latest.get('rsi', 0),
-                    'ma_short': latest.get('ma_short', 0),
-                    'ma_long': latest.get('ma_long', 0),
-                    'volume': latest.get('volume', 0),
-                    'atr': latest.get('atr', 0) if 'atr' in latest and not pd.isna(latest['atr']) else 0,
+                    **symbol_data,  # Entpacke die gecachten Symbol-Daten
                     # Fundamentale Daten
                     'fundamental_scores': fundamental_scores,
                     'fundamental_ratings': fundamental_ratings,
@@ -323,7 +359,7 @@ def dashboard():
         # Initialisiere Variablen
         signals = []
         hit_rates = {'50': [], '60': [], '70': [], '80': [], '90': [], '100': []}
-        watchlist = WATCHLIST_STOCKS
+        watchlist = WEB_WATCHLIST_STOCKS  # Verwende Web-Watchlist für Performance
         total_tickers = len(watchlist)
         avg_rate = 0
         total_signals = 0
@@ -361,7 +397,7 @@ def dashboard():
 
         # Verarbeite ALLE Watchlist-Symbole (vollständige Abdeckung)
         processed_count = 0
-        for symbol in watchlist:  # Alle 425 Ticker verarbeiten
+        for symbol in watchlist:  # Alle Web-Watchlist Symbole verarbeiten
             try:
                 processed_count += 1
                 if processed_count % 50 == 0:
@@ -496,7 +532,7 @@ def dashboard():
         return render_template('dashboard.html',
                              signals=signals,
                              hit_rates=hit_rates,
-                             watchlist=watchlist[:20],  # Erhöht auf 20
+                             watchlist=watchlist[:20],  # Erhöht auf 20 (aus Web-Watchlist)
                              total_tickers=total_tickers,
                              avg_rate=avg_rate,
                              total_signals=total_signals,
@@ -581,8 +617,8 @@ def chart(symbol):
 def fundamentals(symbol):
     """Detaillierte fundamentale Analyse für ein Symbol"""
     try:
-        # Prüfe ob Symbol in Watchlist
-        if symbol not in WATCHLIST_STOCKS:
+        # Prüfe ob Symbol in Web-Watchlist
+        if symbol not in WEB_WATCHLIST_STOCKS:
             return render_template('error.html',
                                  error_message=f"Symbol {symbol} nicht in Watchlist gefunden.",
                                  error_type="SymbolNotFound",
